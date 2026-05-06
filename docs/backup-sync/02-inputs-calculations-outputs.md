@@ -77,6 +77,7 @@ Validation includes:
 - Count and retention values must be integers.
 - `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` must be between 5 and 7.
 - `VPS_DESTINATION_DIR`, `LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR` must be absolute paths.
+- `ARCHIVE_BASE_DIR` must not be `VPS_DESTINATION_DIR` or any child path under it; otherwise retention pruning could process archived files as backup files.
 - `RCLONE_FILTER_FILE` must be an absolute path when set.
 - `RCLONE_CONFIG` must be an absolute existing file when set.
 - `FILE_UMASK` must be a valid octal umask.
@@ -467,7 +468,7 @@ When `RETENTION_POLICY="none"` and `SYNC_MODE="sync"`, the script adds:
 --suffix ".$RUN_ID"
 ```
 
-This means destination files that would be deleted or replaced are moved into a run-specific archive folder instead of being permanently removed.
+This means destination files that would be deleted or replaced are moved into a run-specific archive folder instead of being permanently removed. The archive base must remain outside `VPS_DESTINATION_DIR`, and dry runs do not create per-run archive folders.
 
 Example:
 

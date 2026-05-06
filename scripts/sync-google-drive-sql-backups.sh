@@ -124,6 +124,27 @@ get_destination_mount_target() {
   findmnt -n -T "$dir" -o TARGET
 }
 
+normalize_absolute_path_for_compare() {
+  local path="$1"
+
+  path="${path%/}"
+  if [[ -z "$path" ]]; then
+    printf '/'
+  else
+    printf '%s' "$path"
+  fi
+}
+
+path_is_same_or_inside() {
+  local child
+  local parent
+
+  child="$(normalize_absolute_path_for_compare "$1")"
+  parent="$(normalize_absolute_path_for_compare "$2")"
+
+  [[ "$child" == "$parent" || "$child" == "$parent"/* ]]
+}
+
 ensure_directory() {
   local path="$1"
   local mode="$2"
@@ -453,7 +474,7 @@ prune_local_files_not_selected() {
   done < <(find "$VPS_DESTINATION_DIR" -type f -print0)
 
   if ! is_true "$DRY_RUN"; then
-    find "$VPS_DESTINATION_DIR" -depth -type d -empty -delete
+    find "$VPS_DESTINATION_DIR" -mindepth 1 -depth -type d -empty -delete
   fi
 
   print "Local prune candidates: $LOCAL_PRUNE_CANDIDATES"
@@ -477,7 +498,9 @@ run_latest_per_financial_year_transfer() {
 
   if is_true "$ARCHIVE_DELETED_FILES"; then
     ARCHIVE_RUN_DIR="${ARCHIVE_BASE_DIR}/${RUN_ID}"
-    mkdir -p "$ARCHIVE_RUN_DIR"
+    if ! is_true "$DRY_RUN"; then
+      mkdir -p "$ARCHIVE_RUN_DIR"
+    fi
     RCLONE_ARGS+=(--backup-dir "$ARCHIVE_RUN_DIR" --suffix ".${RUN_ID}")
     print "Overwritten copied files and pruned local files will be archived to: $ARCHIVE_RUN_DIR"
   fi
@@ -503,7 +526,9 @@ run_standard_transfer() {
 
   if [[ "$SYNC_MODE" == "sync" ]] && is_true "$ARCHIVE_DELETED_FILES"; then
     ARCHIVE_RUN_DIR="${ARCHIVE_BASE_DIR}/${RUN_ID}"
-    mkdir -p "$ARCHIVE_RUN_DIR"
+    if ! is_true "$DRY_RUN"; then
+      mkdir -p "$ARCHIVE_RUN_DIR"
+    fi
     RCLONE_ARGS+=(--backup-dir "$ARCHIVE_RUN_DIR" --suffix ".${RUN_ID}")
     print "Deleted/overwritten destination files will be archived to: $ARCHIVE_RUN_DIR"
   fi
@@ -642,6 +667,10 @@ require_absolute_path "$VPS_DESTINATION_DIR" "VPS_DESTINATION_DIR"
 require_absolute_path "$LOG_DIR" "LOG_DIR"
 require_absolute_path "$STATE_DIR" "STATE_DIR"
 require_absolute_path "$ARCHIVE_BASE_DIR" "ARCHIVE_BASE_DIR"
+
+if path_is_same_or_inside "$ARCHIVE_BASE_DIR" "$VPS_DESTINATION_DIR"; then
+  fail "ARCHIVE_BASE_DIR must not be the destination folder or inside it. This prevents archived files from being re-pruned during retention runs."
+fi
 
 if [[ -n "$RCLONE_FILTER_FILE" ]]; then
   require_absolute_path "$RCLONE_FILTER_FILE" "RCLONE_FILTER_FILE"
