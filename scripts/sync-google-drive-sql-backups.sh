@@ -37,6 +37,7 @@ SOURCE=""
 ARCHIVE_RUN_DIR=""
 CHECK_STATUS="skipped"
 SUMMARY_WRITTEN="false"
+STATE_DIR_SAFE_FOR_SUMMARY="false"
 REMOTE_FILE_COUNT="0"
 SELECTED_REMOTE_FILES="0"
 FILES_WITHOUT_RETENTION_TIMESTAMP="0"
@@ -63,12 +64,61 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command '$1' is not installed or not in PATH. Re-run the installer from the repository: sudo bash scripts/install-rclone-google-drive-sync.sh"
 }
 
+strip_trailing_slashes() {
+  local value="$1"
+
+  while [[ "$value" != "/" && "$value" == */ ]]; do
+    value="${value%/}"
+  done
+
+  printf '%s' "$value"
+}
+
+strip_leading_slashes() {
+  local value="$1"
+
+  while [[ "$value" == /* ]]; do
+    value="${value#/}"
+  done
+
+  printf '%s' "$value"
+}
+
 require_absolute_path() {
   local value="$1"
   local name="$2"
 
   [[ -n "$value" ]] || fail "$name must not be empty."
   [[ "$value" == /* ]] || fail "$name must be an absolute path. Current value: $value"
+}
+
+require_managed_path_safe() {
+  local path
+  local name="$2"
+
+  path="$(strip_trailing_slashes "$1")"
+
+  require_absolute_path "$path" "$name"
+
+  case "$path" in
+    / | /bin | /boot | /dev | /etc | /home | /lib | /lib64 | /mnt | /opt | /proc | /root | /run | /sbin | /srv | /sys | /tmp | /usr | /var | /var/backups | /var/lib | /var/log)
+      fail "$name points at a broad system directory that this script must not manage: $path"
+      ;;
+  esac
+
+  if [[ "$path" == *'/../'* || "$path" == */.. || "$path" == *'/./'* || "$path" == */. ]]; then
+    fail "$name must not contain . or .. path segments: $path"
+  fi
+}
+
+path_is_within() {
+  local child
+  local parent
+
+  child="$(strip_trailing_slashes "$1")"
+  parent="$(strip_trailing_slashes "$2")"
+
+  [[ "$child" == "$parent" || "$child" == "$parent"/* ]]
 }
 
 validate_integer() {
@@ -130,7 +180,7 @@ ensure_directory() {
   local description="$3"
   local probe
 
-  require_absolute_path "$path" "$description"
+  require_managed_path_safe "$path" "$description"
 
   if [[ -e "$path" && ! -d "$path" ]]; then
     fail "$description exists but is not a directory: $path"
@@ -166,7 +216,7 @@ write_summary() {
   local bytes_after="$8"
   local bytes_delta="$9"
 
-  if [[ -z "${STATE_DIR:-}" ]]; then
+  if [[ -z "${STATE_DIR:-}" || "$STATE_DIR_SAFE_FOR_SUMMARY" != "true" ]]; then
     return
   fi
 
@@ -628,20 +678,38 @@ case "$RETENTION_TIMESTAMP_MODE" in
   *) fail "RETENTION_TIMESTAMP_MODE must be latest_metadata_time, upload_time, modified_time, or rclone_modtime. Current value: $RETENTION_TIMESTAMP_MODE" ;;
 esac
 
-if [[ -z "$GDRIVE_SOURCE_PATH" || "$GDRIVE_SOURCE_PATH" == "/" || "$GDRIVE_SOURCE_PATH" == "." ]]; then
-  fail "GDRIVE_SOURCE_PATH must point to a specific Google Drive backup folder. Refusing to use Drive root."
+VPS_DESTINATION_DIR="$(strip_trailing_slashes "$VPS_DESTINATION_DIR")"
+LOG_DIR="$(strip_trailing_slashes "$LOG_DIR")"
+STATE_DIR="$(strip_trailing_slashes "$STATE_DIR")"
+ARCHIVE_BASE_DIR="$(strip_trailing_slashes "$ARCHIVE_BASE_DIR")"
+
+require_managed_path_safe "$STATE_DIR" "STATE_DIR"
+STATE_DIR_SAFE_FOR_SUMMARY="true"
+
+NORMALIZED_SOURCE_PATH="$(strip_leading_slashes "$GDRIVE_SOURCE_PATH")"
+NORMALIZED_SOURCE_PATH="$(strip_trailing_slashes "$NORMALIZED_SOURCE_PATH")"
+if [[ -z "$NORMALIZED_SOURCE_PATH" || "$NORMALIZED_SOURCE_PATH" == "." || "$NORMALIZED_SOURCE_PATH" == *'/../'* || "$NORMALIZED_SOURCE_PATH" == ../* || "$NORMALIZED_SOURCE_PATH" == */.. || "$NORMALIZED_SOURCE_PATH" == '..' ]]; then
+  fail "GDRIVE_SOURCE_PATH must point to a specific Google Drive backup folder. Refusing to use Drive root or parent-directory traversal."
 fi
 
-destination_path_without_trailing_slash="${VPS_DESTINATION_DIR%/}"
-destination_leaf="${destination_path_without_trailing_slash##*/}"
+destination_leaf="${VPS_DESTINATION_DIR##*/}"
 if [[ "$destination_leaf" != "dailybackups" ]] && ! is_true "$ALLOW_NON_DAILYBACKUPS_DESTINATION"; then
   fail "VPS_DESTINATION_DIR must end in dailybackups. Current value: $VPS_DESTINATION_DIR"
 fi
 
-require_absolute_path "$VPS_DESTINATION_DIR" "VPS_DESTINATION_DIR"
-require_absolute_path "$LOG_DIR" "LOG_DIR"
-require_absolute_path "$STATE_DIR" "STATE_DIR"
-require_absolute_path "$ARCHIVE_BASE_DIR" "ARCHIVE_BASE_DIR"
+require_managed_path_safe "$VPS_DESTINATION_DIR" "VPS_DESTINATION_DIR"
+require_managed_path_safe "$LOG_DIR" "LOG_DIR"
+require_managed_path_safe "$ARCHIVE_BASE_DIR" "ARCHIVE_BASE_DIR"
+
+for managed_path in "$LOG_DIR" "$STATE_DIR" "$ARCHIVE_BASE_DIR"; do
+  if path_is_within "$managed_path" "$VPS_DESTINATION_DIR"; then
+    fail "LOG_DIR, STATE_DIR, and ARCHIVE_BASE_DIR must not be inside VPS_DESTINATION_DIR because retention pruning manages destination files: $managed_path"
+  fi
+done
+
+if [[ "$LOG_DIR" == "$STATE_DIR" || "$LOG_DIR" == "$ARCHIVE_BASE_DIR" || "$STATE_DIR" == "$ARCHIVE_BASE_DIR" ]]; then
+  fail "LOG_DIR, STATE_DIR, and ARCHIVE_BASE_DIR must be separate directories."
+fi
 
 if [[ -n "$RCLONE_FILTER_FILE" ]]; then
   require_absolute_path "$RCLONE_FILTER_FILE" "RCLONE_FILTER_FILE"
@@ -685,7 +753,6 @@ if ! flock -n 9; then
   fail "Another sync run already holds the lock: $LOCK_FILE"
 fi
 
-NORMALIZED_SOURCE_PATH="${GDRIVE_SOURCE_PATH#/}"
 SOURCE="${RCLONE_REMOTE_NAME}:${NORMALIZED_SOURCE_PATH}"
 
 print "Run ID: $RUN_ID"

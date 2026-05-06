@@ -71,7 +71,7 @@ The production VPS environment is:
 - Bash.
 - jq for structured JSON selection of latest backup files per financial-year folder.
 - A current rclone release that supports `rclone lsjson --metadata`.
-- Enough disk space for the full backup folder plus archive overhead.
+- Enough disk space for the selected local retention set plus archive overhead.
 - Network access to Google Drive APIs.
 - rclone installed and configured.
 
@@ -183,7 +183,7 @@ The guard exists because the business requirement specifically names `dailybacku
 - Prevent accidental whole-Drive syncs.
 - Prevent overlapping sync runs with a lock file.
 - Prevent unexpected production writes during first setup by defaulting to dry-run mode.
-- Archive destination files that would be deleted or overwritten during `sync`.
+- Archive destination files that would be deleted, overwritten, or pruned by retention.
 - Produce logs and state summaries after each run.
 - Allow optional post-sync verification.
 
@@ -192,7 +192,7 @@ The guard exists because the business requirement specifically names `dailybacku
 | Risk | Control |
 | --- | --- |
 | Wrong Google Drive folder selected | Dry run, explicit `GDRIVE_SOURCE_PATH`, logs showing source and destination. |
-| Destination files deleted by sync | `ARCHIVE_DELETED_FILES="true"` uses rclone `--backup-dir`. |
+| Destination files deleted, overwritten, or pruned | `ARCHIVE_DELETED_FILES="true"` uses rclone `--backup-dir` for rclone-managed changes and moves retention-pruned files into the run archive. |
 | VPS disk full | `MIN_FREE_SPACE_BYTES` free-space check before sync starts. |
 | Bare-metal root filesystem fills up | Optional `REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM="true"` guard if `/dailybackups` should be on separate storage. |
 | Multiple syncs running together | `flock` lock at `/var/lib/rclone-gdrive-sql-backup-sync/sync.lock`. |

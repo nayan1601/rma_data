@@ -61,7 +61,7 @@ VPS_DESTINATION_DIR="/backups"
 | `RETENTION_TIMESTAMP_MODE` | `latest_metadata_time`, `upload_time`, `modified_time`, `rclone_modtime` | `latest_metadata_time` | Controls which rclone/Google Drive metadata timestamp defines latest. Filename is never used. |
 | `ALLOW_ROOT_LEVEL_BACKUP_FILES` | `true`, `false` | `false` | If false, source files not inside a financial-year folder cause failure. |
 | `SYNC_MODE` | `sync`, `copy` | `sync` | Used only when `RETENTION_POLICY="none"`. |
-| `ARCHIVE_DELETED_FILES` | `true`, `false` | `true` | Archives destination files deleted or overwritten by sync. |
+| `ARCHIVE_DELETED_FILES` | `true`, `false` | `true` | Archives destination files deleted, overwritten, or pruned by retention. |
 | `ARCHIVE_BASE_DIR` | Absolute path | `/var/backups/rclone-gdrive-sql-backup-sync/archive` | Parent folder for deletion archives. |
 | `RCLONE_FILTER_FILE` | File path or empty | empty | Optional rclone filter file. |
 | `MIN_FREE_SPACE_BYTES` | Integer bytes | `10737418240` | Minimum free bytes required before sync starts. |
@@ -168,7 +168,7 @@ Example:
 gdrive:SQL Backups
 ```
 
-If `GDRIVE_SOURCE_PATH` starts with `/`, the script removes the first leading slash before passing it to rclone. This keeps Drive paths consistent.
+If `GDRIVE_SOURCE_PATH` starts or ends with `/`, the script strips those slashes before passing it to rclone. If nothing remains, the script refuses to run. This keeps Drive paths consistent while preventing accidental Drive-root syncs.
 
 The script refuses these source paths:
 
@@ -178,7 +178,7 @@ The script refuses these source paths:
 "."
 ```
 
-Reason: syncing the Google Drive root is too broad and risky.
+Reason: syncing the Google Drive root is too broad and risky. Parent-directory traversal such as `../Backups` is also rejected.
 
 ## Destination Path Format
 
@@ -196,7 +196,7 @@ Also valid:
 /mnt/storage/dailybackups
 ```
 
-The script creates the destination folder if it does not exist.
+The script creates the destination folder if it does not exist. Managed runtime directories (`LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR`) must be separate from each other and must not be inside `VPS_DESTINATION_DIR`, because retention pruning intentionally manages files under the destination tree.
 
 ## Calculations Performed By The Script
 
