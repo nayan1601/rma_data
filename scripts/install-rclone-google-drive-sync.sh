@@ -28,6 +28,22 @@ ENV_TARGET="/etc/rclone-gdrive-sql-backup-sync.env"
 FILTER_DIR="/etc/rclone-gdrive-sql-backup-sync"
 FILTER_EXAMPLE_TARGET="${FILTER_DIR}/sql-backups.filter.example"
 
+print_os_context() {
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    printf 'Detected OS: %s\n' "${PRETTY_NAME:-unknown}"
+
+    if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "24.04" ]]; then
+      printf 'Target OS confirmed: Ubuntu 24.04 Server.\n'
+    else
+      printf 'WARNING: Production target is Ubuntu 24.04 Server bare metal; this host reports %s %s.\n' "${ID:-unknown}" "${VERSION_ID:-unknown}" >&2
+    fi
+  else
+    printf 'WARNING: /etc/os-release not found. Cannot confirm Ubuntu 24.04 target.\n' >&2
+  fi
+}
+
 install_packages() {
   if command -v rclone >/dev/null 2>&1; then
     printf 'rclone already installed: %s\n' "$(command -v rclone)"
@@ -36,21 +52,34 @@ install_packages() {
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
-      rclone util-linux coreutils findutils gawk grep
+      rclone util-linux coreutils findutils gawk grep jq
     return
   fi
 
   if command -v dnf >/dev/null 2>&1; then
-    dnf install -y rclone util-linux coreutils findutils gawk grep
+    dnf install -y rclone util-linux coreutils findutils gawk grep jq
     return
   fi
 
   if command -v yum >/dev/null 2>&1; then
-    yum install -y rclone util-linux coreutils findutils gawk grep
+    yum install -y rclone util-linux coreutils findutils gawk grep jq
     return
   fi
 
-  printf 'WARNING: Unsupported package manager. Install rclone, util-linux, coreutils, findutils, gawk, and grep manually.\n' >&2
+  printf 'WARNING: Unsupported package manager. Install rclone, util-linux, coreutils, findutils, gawk, grep, and jq manually.\n' >&2
+}
+
+validate_rclone_capabilities() {
+  if ! command -v rclone >/dev/null 2>&1; then
+    printf 'ERROR: rclone is not installed or not in PATH.\n' >&2
+    exit 1
+  fi
+
+  if ! rclone lsjson --help 2>/dev/null | grep -q -- '--metadata'; then
+    printf 'ERROR: installed rclone does not support lsjson --metadata.\n' >&2
+    printf 'Install a current rclone release from https://rclone.org/downloads/ and rerun this script.\n' >&2
+    exit 1
+  fi
 }
 
 [[ -f "$SYNC_SCRIPT_SOURCE" ]] || {
@@ -63,7 +92,9 @@ install_packages() {
   exit 1
 }
 
+print_os_context
 install_packages
+validate_rclone_capabilities
 
 install -m 0755 "$SYNC_SCRIPT_SOURCE" "$SYNC_SCRIPT_TARGET"
 

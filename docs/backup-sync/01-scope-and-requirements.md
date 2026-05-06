@@ -2,12 +2,14 @@
 
 ## Purpose
 
-This module syncs SQL backup files from a Google Drive folder to a Linux VPS folder named `dailybackups` using `rclone`.
+This module syncs SQL backup files from a Google Drive folder to an Ubuntu 24.04 Server bare-metal VPS folder named `dailybackups` using `rclone`.
 
 The target outcome is:
 
 ```text
-Google Drive backup folder  ->  rclone remote  ->  VPS /dailybackups folder
+Google Drive backup folder with financial-year subfolders
+  -> rclone remote
+  -> VPS /dailybackups/<same-financial-year-folder>
 ```
 
 The module is designed for operational use. It includes:
@@ -18,11 +20,15 @@ The module is designed for operational use. It includes:
 - systemd service and timer files for daily scheduling.
 - Logs and machine-readable run summaries.
 - Safety controls for dry runs, free-space checks, and deleted-file archival.
+- Financial-year based VPS retention to keep only the latest 5-7 backups per financial year.
+- Metadata-based latest-file selection using Google Drive upload/create and update times, not filenames.
 
 ## In Scope
 
 - One-way sync from Google Drive to VPS.
 - Destination folder named `dailybackups`.
+- Preservation of top-level Google Drive financial-year folders under `dailybackups`.
+- Local VPS retention of only the latest configured backup files per financial-year folder.
 - Manual execution for first validation.
 - Daily scheduled execution through systemd.
 - rclone remote configuration documentation.
@@ -55,16 +61,20 @@ Those can become later modules after the sync foundation is stable.
 
 ## Required VPS Environment
 
-The VPS should be a Linux server with:
+The production VPS environment is:
 
+- Ubuntu 24.04 Server.
+- Bare-metal hosting.
+- systemd.
 - Root or sudo access.
 - Bash.
-- systemd if automated scheduling is required.
+- jq for structured JSON selection of latest backup files per financial-year folder.
+- A current rclone release that supports `rclone lsjson --metadata`.
 - Enough disk space for the full backup folder plus archive overhead.
 - Network access to Google Drive APIs.
 - rclone installed and configured.
 
-The install script supports common Debian/Ubuntu, Fedora, and CentOS/RHEL-style package managers.
+The install script is aligned with Ubuntu apt-based installation and still contains fallback handling for other common package managers.
 
 ## Required Google Drive Setup
 
@@ -81,6 +91,28 @@ Company Backups/Production SQL
 ```
 
 The folder path becomes `GDRIVE_SOURCE_PATH` in `/etc/rclone-gdrive-sql-backup-sync.env`.
+
+By default, that source folder must contain financial-year folders as immediate child folders.
+
+Example:
+
+```text
+SQL Backups/
+  FY2023-24/
+  FY2024-25/
+  FY2025-26/
+```
+
+The same folders are created on the VPS:
+
+```text
+/dailybackups/
+  FY2023-24/
+  FY2024-25/
+  FY2025-26/
+```
+
+Root-level files directly inside `SQL Backups/` are rejected by default when financial-year retention is enabled.
 
 ## Required rclone Remote
 
@@ -144,9 +176,11 @@ The guard exists because the business requirement specifically names `dailybacku
 | Wrong Google Drive folder selected | Dry run, explicit `GDRIVE_SOURCE_PATH`, logs showing source and destination. |
 | Destination files deleted by sync | `ARCHIVE_DELETED_FILES="true"` uses rclone `--backup-dir`. |
 | VPS disk full | `MIN_FREE_SPACE_BYTES` free-space check before sync starts. |
+| Bare-metal root filesystem fills up | Optional `REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM="true"` guard if `/dailybackups` should be on separate storage. |
 | Multiple syncs running together | `flock` lock at `/var/lib/rclone-gdrive-sql-backup-sync/sync.lock`. |
 | rclone configured for one user but service runs as another | Run `rclone config` as the same user used by systemd, or set `RCLONE_CONFIG`. |
 | Google API or network failure | rclone retries plus non-zero exit code, logs, and failed state summary. |
+| Backup filename does not contain a useful date | Retention selection ignores filename and uses rclone/Google Drive metadata timestamps. |
 
 ## Success Criteria
 
@@ -154,7 +188,8 @@ The module is considered working when:
 
 1. `rclone listremotes` shows the configured Google Drive remote.
 2. A dry run prints expected files and no unexpected deletions.
-3. A real run downloads or updates files into `/dailybackups`.
+3. A real run downloads or updates files into `/dailybackups/<financial-year-folder>/`.
 4. `/var/lib/rclone-gdrive-sql-backup-sync/last-run.env` shows `STATUS=success`.
-5. The systemd timer is enabled and listed by `systemctl list-timers`.
-6. Logs exist under `/var/log/rclone-gdrive-sql-backup-sync`.
+5. Each financial-year folder on the VPS keeps no more than `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` selected backup files.
+6. The systemd timer is enabled and listed by `systemctl list-timers`.
+7. Logs exist under `/var/log/rclone-gdrive-sql-backup-sync`.

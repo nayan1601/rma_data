@@ -7,7 +7,7 @@
 | rclone remote | rclone config, usually `/root/.config/rclone/rclone.conf` | Authenticates to Google Drive and exposes it as `gdrive:`. |
 | Environment file | `/etc/rclone-gdrive-sql-backup-sync.env` | Holds source path, destination path, dry-run setting, and runtime options. |
 | Sync script | `/usr/local/bin/rclone-gdrive-sql-backup-sync` | Performs validation, locking, rclone execution, logging, and summary writing. |
-| Destination folder | `/dailybackups` | Stores the synced SQL backup files on the VPS. |
+| Destination folder | `/dailybackups` | Stores the latest selected SQL backup files under financial-year folders. |
 | Log folder | `/var/log/rclone-gdrive-sql-backup-sync` | Stores per-run text logs. |
 | State folder | `/var/lib/rclone-gdrive-sql-backup-sync` | Stores lock file and last-run summary. |
 | Archive folder | `/var/backups/rclone-gdrive-sql-backup-sync/archive` | Stores destination files deleted or overwritten by sync. |
@@ -22,7 +22,7 @@ flowchart LR
     B --> C["sync-google-drive-sql-backups.sh"]
     D["/etc/rclone-gdrive-sql-backup-sync.env"] --> C
     E["optional rclone filter file"] --> C
-    C --> F["/dailybackups"]
+    C --> F["/dailybackups/<financial-year>/latest selected files"]
     C --> G["/var/log/rclone-gdrive-sql-backup-sync/sync-<run-id>.log"]
     C --> H["/var/lib/rclone-gdrive-sql-backup-sync/last-run.env"]
     C --> I["/var/backups/rclone-gdrive-sql-backup-sync/archive/<run-id>"]
@@ -48,12 +48,13 @@ flowchart LR
 6. Script opens a lock file with flock.
 7. Script calculates destination files and bytes before sync.
 8. Script builds rclone arguments.
-9. Script runs rclone sync or rclone copy.
-10. If enabled, script runs rclone check --one-way.
-11. Script removes old logs and old archive folders if retention is enabled.
-12. Script calculates destination files and bytes after sync.
-13. Script writes /var/lib/rclone-gdrive-sql-backup-sync/last-run.env.
-14. Script exits with success or failure.
+9. If financial-year retention is enabled, script lists remote files with metadata, selects latest N per financial year by metadata timestamp, copies selected files, and prunes older local files.
+10. If financial-year retention is disabled, script runs standard rclone sync or copy.
+11. If enabled, script runs rclone check --one-way.
+12. Script removes old logs and old archive folders if retention is enabled.
+13. Script calculates destination files and bytes after sync.
+14. Script writes /var/lib/rclone-gdrive-sql-backup-sync/last-run.env.
+15. Script exits with success or failure.
 ```
 
 ## Pseudocode
@@ -94,14 +95,14 @@ if filter file is configured:
 if checksum verification is configured:
     common_flags += --checksum
 
-if dry run:
-    rclone_args += --dry-run
-
-if sync mode and archive deletion protection:
-    rclone_args += --backup-dir archive/run-id
-    rclone_args += --suffix .run-id
-
-run rclone sync or copy
+if retention policy is latest_per_financial_year:
+    remote_files = rclone lsjson --metadata source recursively
+    retention_time = upload/create and update metadata, depending on RETENTION_TIMESTAMP_MODE
+    selected_files = latest N files per top-level financial-year folder by retention_time
+    run rclone copy source destination --files-from selected_files
+    prune local files that are not in selected_files
+else:
+    run rclone sync or copy according to SYNC_MODE
 
 if post-sync check is enabled:
     run rclone check --one-way
@@ -114,7 +115,25 @@ write last-run.env
 exit
 ```
 
-## Why The Script Uses rclone sync
+## Why The Default Uses Selected rclone copy
+
+The current storage requirement is:
+
+```text
+keep only the latest 5-7 backups on the VPS for each financial year
+```
+
+Google Drive remains the full source archive. If the VPS used plain `rclone sync` against the full Google Drive folder, older files pruned locally would be downloaded again on the next run because they still exist in Google Drive.
+
+For that reason, the default policy uses:
+
+```text
+rclone lsjson --metadata -> select latest N per financial year -> rclone copy --files-from -> local prune
+```
+
+This still uses rclone for Google Drive transfer, but the effective VPS state is intentionally smaller than the full Google Drive archive.
+
+## Standard rclone sync Mode
 
 The requirement says the VPS should sync from Google Drive. In rclone terms:
 
@@ -137,7 +156,27 @@ That is the correct behavior for a mirror, but it is risky for backups if someon
 | `sync` | `rclone sync` | Yes, unless protected by archive behavior. | Keep VPS folder as exact mirror of Drive folder. |
 | `copy` | `rclone copy` | No. | Safer one-way accumulation where old local files remain. |
 
-The default is `sync` because that matches the stated requirement.
+`SYNC_MODE` is used only when `RETENTION_POLICY="none"`.
+
+## Financial-Year Retention Logic
+
+The script expects financial-year folders as top-level folders under `GDRIVE_SOURCE_PATH`.
+
+Example:
+
+```text
+SQL Backups/FY2024-25/file-a.sql.gz
+SQL Backups/FY2025-26/file-b.sql.gz
+```
+
+The script groups by the first path segment:
+
+```text
+FY2024-25
+FY2025-26
+```
+
+Inside each group, files are sorted by the configured metadata timestamp descending. The default `RETENTION_TIMESTAMP_MODE="latest_metadata_time"` uses the newest available value among Google Drive upload/create metadata, Google Drive update metadata, and rclone `ModTime`. The newest `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` files are copied to the VPS. Local files not in that selected set are archived or deleted depending on `ARCHIVE_DELETED_FILES`.
 
 ## Locking Logic
 

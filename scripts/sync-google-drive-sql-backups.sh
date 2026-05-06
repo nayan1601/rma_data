@@ -2,17 +2,22 @@
 #
 # Sync Google Drive SQL backups to a VPS folder named dailybackups.
 #
-# This script is intentionally verbose and defensive because it is operational
-# code. A new intern should be able to read the comments and understand what is
-# happening; a senior reviewer should be able to see the failure boundaries.
+# This script is intentionally defensive because it is operational code.
+# It supports two transfer strategies:
 #
-# Main behavior:
-#   1. Read settings from an environment file.
-#   2. Validate rclone, the configured remote, and the destination folder.
-#   3. Create runtime directories for logs, state, and delete archives.
-#   4. Run `rclone sync` or `rclone copy`.
-#   5. Optionally run `rclone check --one-way`.
-#   6. Write a machine-readable last-run summary.
+#   1. RETENTION_POLICY="latest_per_financial_year"
+#      - Google Drive source is expected to contain financial-year folders as
+#        top-level folders.
+#      - The script lists remote backup files with rclone metadata, selects the
+#        latest N files inside each financial-year folder by metadata timestamp,
+#        copies only those selected files to the VPS, then prunes older local
+#        files.
+#
+#   2. RETENTION_POLICY="none"
+#      - The script runs a normal rclone sync or copy using SYNC_MODE.
+#
+# The default is latest_per_financial_year because the VPS should not keep an
+# unlimited full history when Google Drive already holds the complete archive.
 
 set -Eeuo pipefail
 
@@ -32,6 +37,11 @@ SOURCE=""
 ARCHIVE_RUN_DIR=""
 CHECK_STATUS="skipped"
 SUMMARY_WRITTEN="false"
+REMOTE_FILE_COUNT="0"
+SELECTED_REMOTE_FILES="0"
+FILES_WITHOUT_RETENTION_TIMESTAMP="0"
+LOCAL_PRUNE_CANDIDATES="0"
+LOCAL_PRUNED_FILES="0"
 
 print() {
   printf '%s\n' "$*"
@@ -51,6 +61,12 @@ is_true() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command '$1' is not installed or not in PATH."
+}
+
+require_rclone_metadata_support() {
+  if ! "$RCLONE_BIN" lsjson --help 2>/dev/null | grep -q -- '--metadata'; then
+    fail "Installed rclone does not support 'lsjson --metadata'. Install a current rclone release before using financial-year metadata retention."
+  fi
 }
 
 count_files() {
@@ -76,6 +92,11 @@ count_bytes() {
 get_available_bytes() {
   local dir="$1"
   df -PB1 "$dir" | awk 'NR == 2 {print $4}'
+}
+
+get_destination_mount_target() {
+  local dir="$1"
+  findmnt -n -T "$dir" -o TARGET
 }
 
 write_kv() {
@@ -112,6 +133,14 @@ write_summary() {
     write_kv "EXIT_CODE" "$exit_code"
     write_kv "SOURCE" "$SOURCE"
     write_kv "DESTINATION" "$VPS_DESTINATION_DIR"
+    write_kv "RETENTION_POLICY" "${RETENTION_POLICY:-}"
+    write_kv "BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR" "${BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR:-}"
+    write_kv "RETENTION_TIMESTAMP_MODE" "${RETENTION_TIMESTAMP_MODE:-}"
+    write_kv "REMOTE_FILE_COUNT" "$REMOTE_FILE_COUNT"
+    write_kv "SELECTED_REMOTE_FILES" "$SELECTED_REMOTE_FILES"
+    write_kv "FILES_WITHOUT_RETENTION_TIMESTAMP" "$FILES_WITHOUT_RETENTION_TIMESTAMP"
+    write_kv "LOCAL_PRUNE_CANDIDATES" "$LOCAL_PRUNE_CANDIDATES"
+    write_kv "LOCAL_PRUNED_FILES" "$LOCAL_PRUNED_FILES"
     write_kv "STARTED_AT_UTC" "$STARTED_AT_UTC"
     write_kv "FINISHED_AT_UTC" "$finished_at_utc"
     write_kv "DURATION_SECONDS" "$duration_seconds"
@@ -171,6 +200,296 @@ on_exit() {
   exit "$exit_code"
 }
 
+build_remote_list_flags() {
+  REMOTE_LIST_FLAGS=(
+    --drive-skip-gdocs
+    --log-level "$RCLONE_LOG_LEVEL"
+    --metadata
+  )
+
+  if [[ -n "$RCLONE_FILTER_FILE" ]]; then
+    REMOTE_LIST_FLAGS+=(--filter-from "$RCLONE_FILTER_FILE")
+  fi
+}
+
+build_common_transfer_flags() {
+  COMMON_RCLONE_FLAGS=(
+    --log-level "$RCLONE_LOG_LEVEL"
+    --stats "$RCLONE_STATS_INTERVAL"
+    --transfers "$RCLONE_TRANSFERS"
+    --checkers "$RCLONE_CHECKERS"
+    --retries "$RCLONE_RETRIES"
+    --low-level-retries "$RCLONE_LOW_LEVEL_RETRIES"
+    --drive-skip-gdocs
+  )
+
+  if is_true "$RCLONE_FAST_LIST"; then
+    COMMON_RCLONE_FLAGS+=(--fast-list)
+  fi
+
+  if is_true "$VERIFY_WITH_CHECKSUM"; then
+    COMMON_RCLONE_FLAGS+=(--checksum)
+  fi
+
+  if [[ -n "$RCLONE_BWLIMIT" ]]; then
+    COMMON_RCLONE_FLAGS+=(--bwlimit "$RCLONE_BWLIMIT")
+  fi
+
+  if [[ -n "$RCLONE_FILTER_FILE" ]]; then
+    COMMON_RCLONE_FLAGS+=(--filter-from "$RCLONE_FILTER_FILE")
+  fi
+}
+
+select_latest_files_per_financial_year() {
+  REMOTE_LIST_JSON="${STATE_DIR}/remote-files-${RUN_ID}.json"
+  SELECTED_FILES_FILE="${STATE_DIR}/selected-files-${RUN_ID}.txt"
+  FY_SELECTION_REPORT="${STATE_DIR}/financial-year-selection-${RUN_ID}.txt"
+
+  print "Listing remote files for financial-year retention."
+  "$RCLONE_BIN" lsjson "$SOURCE" -R --files-only "${REMOTE_LIST_FLAGS[@]}" >"$REMOTE_LIST_JSON"
+
+  REMOTE_FILE_COUNT="$(jq '[.[]] | length' "$REMOTE_LIST_JSON")"
+  print "Remote files after filters: $REMOTE_FILE_COUNT"
+
+  ROOT_LEVEL_FILE_COUNT="$(
+    jq '[.[] | select((.Path | contains("/")) | not)] | length' "$REMOTE_LIST_JSON"
+  )"
+
+  if (( ROOT_LEVEL_FILE_COUNT > 0 )) && ! is_true "$ALLOW_ROOT_LEVEL_BACKUP_FILES"; then
+    print "Root-level files found in the source. They are not inside a financial-year folder:"
+    jq -r '.[] | select((.Path | contains("/")) | not) | "  - " + .Path' "$REMOTE_LIST_JSON"
+    fail "Refusing retention run because every backup file must be inside a top-level financial-year folder."
+  fi
+
+  FILES_WITHOUT_RETENTION_TIMESTAMP="$(
+    jq -r --arg timestamp_mode "$RETENTION_TIMESTAMP_MODE" '
+      def retention_time($mode):
+        if $mode == "upload_time" then
+          (.Metadata.btime? // "")
+        elif $mode == "modified_time" then
+          (.Metadata.mtime? // .ModTime? // "")
+        elif $mode == "rclone_modtime" then
+          (.ModTime? // "")
+        elif $mode == "latest_metadata_time" then
+          ([.Metadata.btime?, .Metadata.mtime?, .ModTime?]
+            | map(select(. != null and . != ""))
+            | max // "")
+        else
+          ""
+        end;
+
+      [
+        .[]
+        | select(.Path | contains("/"))
+        | select((retention_time($timestamp_mode)) == "")
+      ]
+      | length
+    ' "$REMOTE_LIST_JSON"
+  )"
+
+  if (( FILES_WITHOUT_RETENTION_TIMESTAMP > 0 )); then
+    fail "Some remote files have no usable retention timestamp for RETENTION_TIMESTAMP_MODE=${RETENTION_TIMESTAMP_MODE}."
+  fi
+
+  jq -r \
+    --argjson keep "$BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR" \
+    --arg timestamp_mode "$RETENTION_TIMESTAMP_MODE" '
+    def retention_time($mode):
+      if $mode == "upload_time" then
+        (.Metadata.btime? // "")
+      elif $mode == "modified_time" then
+        (.Metadata.mtime? // .ModTime? // "")
+      elif $mode == "rclone_modtime" then
+        (.ModTime? // "")
+      elif $mode == "latest_metadata_time" then
+        ([.Metadata.btime?, .Metadata.mtime?, .ModTime?]
+          | map(select(. != null and . != ""))
+          | max // "")
+      else
+        ""
+      end;
+
+    [
+      .[]
+      | select(.Path | contains("/"))
+      | . + {
+          financial_year: (.Path | split("/")[0]),
+          retention_time: retention_time($timestamp_mode)
+        }
+    ]
+    | sort_by(.financial_year)
+    | group_by(.financial_year)
+    | map(sort_by(.retention_time, .Path) | reverse | .[:$keep])
+    | flatten
+    | .[].Path
+  ' "$REMOTE_LIST_JSON" >"$SELECTED_FILES_FILE"
+
+  SELECTED_REMOTE_FILES="$(wc -l <"$SELECTED_FILES_FILE" | tr -d '[:space:]')"
+
+  jq -r \
+    --argjson keep "$BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR" \
+    --arg timestamp_mode "$RETENTION_TIMESTAMP_MODE" '
+    def retention_time($mode):
+      if $mode == "upload_time" then
+        (.Metadata.btime? // "")
+      elif $mode == "modified_time" then
+        (.Metadata.mtime? // .ModTime? // "")
+      elif $mode == "rclone_modtime" then
+        (.ModTime? // "")
+      elif $mode == "latest_metadata_time" then
+        ([.Metadata.btime?, .Metadata.mtime?, .ModTime?]
+          | map(select(. != null and . != ""))
+          | max // "")
+      else
+        ""
+      end;
+
+    [
+      .[]
+      | select(.Path | contains("/"))
+      | . + {
+          financial_year: (.Path | split("/")[0]),
+          retention_time: retention_time($timestamp_mode)
+        }
+    ]
+    | sort_by(.financial_year)
+    | group_by(.financial_year)
+    | .[]
+    | . as $items
+    | ($items | sort_by(.retention_time, .Path) | reverse | .[:$keep]) as $selected
+    | "\($items[0].financial_year): total_remote_files=\($items | length), selected_for_vps=\($selected | length), newest_selected_metadata_time=\(($selected | map(.retention_time) | max) // ""), oldest_selected_metadata_time=\(($selected | map(.retention_time) | min) // "")"
+  ' "$REMOTE_LIST_JSON" >"$FY_SELECTION_REPORT"
+
+  print "Selected remote files for VPS retention: $SELECTED_REMOTE_FILES"
+  print "Financial-year selection report:"
+  sed 's/^/  /' "$FY_SELECTION_REPORT"
+
+  if (( SELECTED_REMOTE_FILES == 0 )); then
+    fail "No remote backup files were selected. Check GDRIVE_SOURCE_PATH and RCLONE_FILTER_FILE before running again."
+  fi
+}
+
+prune_local_files_not_selected() {
+  local local_file
+  local rel_path
+  local archive_file
+
+  print "Pruning local files that are not in the selected latest-per-financial-year set."
+
+  while IFS= read -r -d '' local_file; do
+    rel_path="${local_file#"$VPS_DESTINATION_DIR"/}"
+
+    if grep -Fxq -- "$rel_path" "$SELECTED_FILES_FILE"; then
+      continue
+    fi
+
+    LOCAL_PRUNE_CANDIDATES="$((LOCAL_PRUNE_CANDIDATES + 1))"
+
+    if is_true "$DRY_RUN"; then
+      print "DRY RUN: would prune local file: $rel_path"
+      continue
+    fi
+
+    if is_true "$ARCHIVE_DELETED_FILES"; then
+      ARCHIVE_RUN_DIR="${ARCHIVE_RUN_DIR:-${ARCHIVE_BASE_DIR}/${RUN_ID}}"
+      archive_file="${ARCHIVE_RUN_DIR}/${rel_path}.${RUN_ID}"
+      mkdir -p "$(dirname "$archive_file")"
+      mv -- "$local_file" "$archive_file"
+      print "Archived pruned local file: $rel_path -> $archive_file"
+    else
+      rm -f -- "$local_file"
+      print "Deleted pruned local file: $rel_path"
+    fi
+
+    LOCAL_PRUNED_FILES="$((LOCAL_PRUNED_FILES + 1))"
+  done < <(find "$VPS_DESTINATION_DIR" -type f -print0)
+
+  if ! is_true "$DRY_RUN"; then
+    find "$VPS_DESTINATION_DIR" -depth -type d -empty -delete
+  fi
+
+  print "Local prune candidates: $LOCAL_PRUNE_CANDIDATES"
+  print "Local files pruned: $LOCAL_PRUNED_FILES"
+}
+
+run_latest_per_financial_year_transfer() {
+  select_latest_files_per_financial_year
+
+  RCLONE_ARGS=(
+    copy
+    "$SOURCE"
+    "$VPS_DESTINATION_DIR"
+    --files-from "$SELECTED_FILES_FILE"
+    "${COMMON_RCLONE_FLAGS[@]}"
+  )
+
+  if is_true "$DRY_RUN"; then
+    RCLONE_ARGS+=(--dry-run)
+  fi
+
+  if is_true "$ARCHIVE_DELETED_FILES"; then
+    ARCHIVE_RUN_DIR="${ARCHIVE_BASE_DIR}/${RUN_ID}"
+    mkdir -p "$ARCHIVE_RUN_DIR"
+    RCLONE_ARGS+=(--backup-dir "$ARCHIVE_RUN_DIR" --suffix ".${RUN_ID}")
+    print "Overwritten copied files and pruned local files will be archived to: $ARCHIVE_RUN_DIR"
+  fi
+
+  print "Starting rclone copy of selected latest financial-year backup files."
+  "$RCLONE_BIN" "${RCLONE_ARGS[@]}"
+  print "rclone copy finished."
+
+  prune_local_files_not_selected
+}
+
+run_standard_transfer() {
+  RCLONE_ARGS=(
+    "$SYNC_MODE"
+    "$SOURCE"
+    "$VPS_DESTINATION_DIR"
+    "${COMMON_RCLONE_FLAGS[@]}"
+  )
+
+  if is_true "$DRY_RUN"; then
+    RCLONE_ARGS+=(--dry-run)
+  fi
+
+  if [[ "$SYNC_MODE" == "sync" ]] && is_true "$ARCHIVE_DELETED_FILES"; then
+    ARCHIVE_RUN_DIR="${ARCHIVE_BASE_DIR}/${RUN_ID}"
+    mkdir -p "$ARCHIVE_RUN_DIR"
+    RCLONE_ARGS+=(--backup-dir "$ARCHIVE_RUN_DIR" --suffix ".${RUN_ID}")
+    print "Deleted/overwritten destination files will be archived to: $ARCHIVE_RUN_DIR"
+  fi
+
+  print "Starting rclone ${SYNC_MODE}."
+  "$RCLONE_BIN" "${RCLONE_ARGS[@]}"
+  print "rclone ${SYNC_MODE} finished."
+}
+
+run_post_sync_check() {
+  CHECK_STATUS="running"
+
+  CHECK_ARGS=(
+    check
+    "$SOURCE"
+    "$VPS_DESTINATION_DIR"
+    --one-way
+    "${COMMON_RCLONE_FLAGS[@]}"
+  )
+
+  if [[ "$RETENTION_POLICY" == "latest_per_financial_year" ]]; then
+    CHECK_ARGS+=(--files-from "$SELECTED_FILES_FILE")
+  fi
+
+  print "Starting post-sync rclone check."
+  if "$RCLONE_BIN" "${CHECK_ARGS[@]}"; then
+    CHECK_STATUS="success"
+    print "Post-sync rclone check passed."
+  else
+    CHECK_STATUS="failed"
+    fail "Post-sync rclone check failed."
+  fi
+}
+
 trap on_exit EXIT
 
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -184,6 +503,10 @@ RCLONE_BIN="${RCLONE_BIN:-rclone}"
 RCLONE_REMOTE_NAME="${RCLONE_REMOTE_NAME:-gdrive}"
 GDRIVE_SOURCE_PATH="${GDRIVE_SOURCE_PATH:-}"
 VPS_DESTINATION_DIR="${VPS_DESTINATION_DIR:-/dailybackups}"
+RETENTION_POLICY="${RETENTION_POLICY:-latest_per_financial_year}"
+BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR="${BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR:-7}"
+RETENTION_TIMESTAMP_MODE="${RETENTION_TIMESTAMP_MODE:-latest_metadata_time}"
+ALLOW_ROOT_LEVEL_BACKUP_FILES="${ALLOW_ROOT_LEVEL_BACKUP_FILES:-false}"
 SYNC_MODE="${SYNC_MODE:-sync}"
 DRY_RUN="${DRY_RUN:-true}"
 ALLOW_NON_DAILYBACKUPS_DESTINATION="${ALLOW_NON_DAILYBACKUPS_DESTINATION:-false}"
@@ -201,15 +524,40 @@ RCLONE_BWLIMIT="${RCLONE_BWLIMIT:-}"
 VERIFY_WITH_CHECKSUM="${VERIFY_WITH_CHECKSUM:-false}"
 POST_SYNC_CHECK="${POST_SYNC_CHECK:-false}"
 MIN_FREE_SPACE_BYTES="${MIN_FREE_SPACE_BYTES:-0}"
+REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM="${REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM:-false}"
 LOG_DIR="${LOG_DIR:-/var/log/rclone-gdrive-sql-backup-sync}"
 STATE_DIR="${STATE_DIR:-/var/lib/rclone-gdrive-sql-backup-sync}"
 FILE_UMASK="${FILE_UMASK:-077}"
 LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-30}"
 ARCHIVE_RETENTION_DAYS="${ARCHIVE_RETENTION_DAYS:-0}"
 
+if [[ -n "${RCLONE_CONFIG:-}" ]]; then
+  export RCLONE_CONFIG
+fi
+
+case "$RETENTION_POLICY" in
+  latest_per_financial_year | none) ;;
+  *) fail "RETENTION_POLICY must be latest_per_financial_year or none. Current value: $RETENTION_POLICY" ;;
+esac
+
 case "$SYNC_MODE" in
   sync | copy) ;;
   *) fail "SYNC_MODE must be either sync or copy. Current value: $SYNC_MODE" ;;
+esac
+
+if [[ "$RETENTION_POLICY" == "latest_per_financial_year" ]]; then
+  if [[ ! "$BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR" =~ ^[0-9]+$ ]]; then
+    fail "BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR must be an integer."
+  fi
+
+  if (( BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR < 5 || BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR > 7 )); then
+    fail "BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR must be between 5 and 7."
+  fi
+fi
+
+case "$RETENTION_TIMESTAMP_MODE" in
+  latest_metadata_time | upload_time | modified_time | rclone_modtime) ;;
+  *) fail "RETENTION_TIMESTAMP_MODE must be latest_metadata_time, upload_time, modified_time, or rclone_modtime. Current value: $RETENTION_TIMESTAMP_MODE" ;;
 esac
 
 if [[ -z "$GDRIVE_SOURCE_PATH" || "$GDRIVE_SOURCE_PATH" == "/" || "$GDRIVE_SOURCE_PATH" == "." ]]; then
@@ -234,8 +582,15 @@ require_command "wc"
 require_command "du"
 require_command "awk"
 require_command "df"
+require_command "findmnt"
 require_command "tee"
 require_command "grep"
+require_command "sed"
+
+if [[ "$RETENTION_POLICY" == "latest_per_financial_year" ]]; then
+  require_command "jq"
+  require_rclone_metadata_support
+fi
 
 mkdir -p "$VPS_DESTINATION_DIR" "$LOG_DIR" "$STATE_DIR" "$ARCHIVE_BASE_DIR"
 
@@ -256,7 +611,10 @@ print "Script: $SCRIPT_NAME"
 print "Environment file: $ENV_FILE"
 print "Source: $SOURCE"
 print "Destination: $VPS_DESTINATION_DIR"
-print "Mode: $SYNC_MODE"
+print "Retention policy: $RETENTION_POLICY"
+print "Backups to keep per financial year: $BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR"
+print "Retention timestamp mode: $RETENTION_TIMESTAMP_MODE"
+print "Configured standard sync mode: $SYNC_MODE"
 print "Dry run: $DRY_RUN"
 
 if ! "$RCLONE_BIN" listremotes | grep -Fxq "${RCLONE_REMOTE_NAME}:"; then
@@ -276,78 +634,29 @@ if (( MIN_FREE_SPACE_BYTES > 0 )); then
   fi
 fi
 
+destination_mount_target="$(get_destination_mount_target "$VPS_DESTINATION_DIR")"
+print "Destination filesystem mount target: $destination_mount_target"
+if is_true "$REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM" && [[ "$destination_mount_target" == "/" ]]; then
+  fail "Destination is on the root filesystem and REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM is true."
+fi
+
 FILES_BEFORE="$(count_files "$VPS_DESTINATION_DIR")"
 BYTES_BEFORE="$(count_bytes "$VPS_DESTINATION_DIR")"
 
-print "Destination files before sync: $FILES_BEFORE"
-print "Destination bytes before sync: $BYTES_BEFORE"
+print "Destination files before transfer: $FILES_BEFORE"
+print "Destination bytes before transfer: $BYTES_BEFORE"
 
-COMMON_RCLONE_FLAGS=(
-  --log-level "$RCLONE_LOG_LEVEL"
-  --stats "$RCLONE_STATS_INTERVAL"
-  --transfers "$RCLONE_TRANSFERS"
-  --checkers "$RCLONE_CHECKERS"
-  --retries "$RCLONE_RETRIES"
-  --low-level-retries "$RCLONE_LOW_LEVEL_RETRIES"
-  --drive-skip-gdocs
-)
+build_common_transfer_flags
+build_remote_list_flags
 
-if is_true "$RCLONE_FAST_LIST"; then
-  COMMON_RCLONE_FLAGS+=(--fast-list)
+if [[ "$RETENTION_POLICY" == "latest_per_financial_year" ]]; then
+  run_latest_per_financial_year_transfer
+else
+  run_standard_transfer
 fi
-
-if is_true "$VERIFY_WITH_CHECKSUM"; then
-  COMMON_RCLONE_FLAGS+=(--checksum)
-fi
-
-if [[ -n "$RCLONE_BWLIMIT" ]]; then
-  COMMON_RCLONE_FLAGS+=(--bwlimit "$RCLONE_BWLIMIT")
-fi
-
-if [[ -n "$RCLONE_FILTER_FILE" ]]; then
-  COMMON_RCLONE_FLAGS+=(--filter-from "$RCLONE_FILTER_FILE")
-fi
-
-RCLONE_ARGS=(
-  "$SYNC_MODE"
-  "$SOURCE"
-  "$VPS_DESTINATION_DIR"
-  "${COMMON_RCLONE_FLAGS[@]}"
-)
-
-if is_true "$DRY_RUN"; then
-  RCLONE_ARGS+=(--dry-run)
-fi
-
-if [[ "$SYNC_MODE" == "sync" ]] && is_true "$ARCHIVE_DELETED_FILES"; then
-  ARCHIVE_RUN_DIR="${ARCHIVE_BASE_DIR}/${RUN_ID}"
-  mkdir -p "$ARCHIVE_RUN_DIR"
-  RCLONE_ARGS+=(--backup-dir "$ARCHIVE_RUN_DIR" --suffix ".${RUN_ID}")
-  print "Deleted/overwritten destination files will be archived to: $ARCHIVE_RUN_DIR"
-fi
-
-print "Starting rclone ${SYNC_MODE}."
-"$RCLONE_BIN" "${RCLONE_ARGS[@]}"
-print "rclone ${SYNC_MODE} finished."
 
 if is_true "$POST_SYNC_CHECK"; then
-  CHECK_STATUS="running"
-  CHECK_ARGS=(
-    check
-    "$SOURCE"
-    "$VPS_DESTINATION_DIR"
-    --one-way
-    "${COMMON_RCLONE_FLAGS[@]}"
-  )
-
-  print "Starting post-sync rclone check."
-  if "$RCLONE_BIN" "${CHECK_ARGS[@]}"; then
-    CHECK_STATUS="success"
-    print "Post-sync rclone check passed."
-  else
-    CHECK_STATUS="failed"
-    fail "Post-sync rclone check failed."
-  fi
+  run_post_sync_check
 fi
 
 if [[ "$LOG_RETENTION_DAYS" =~ ^[0-9]+$ ]] && (( LOG_RETENTION_DAYS > 0 )); then

@@ -2,6 +2,19 @@
 
 This runbook is the practical step-by-step guide for installing, validating, running, and operating the Google Drive to VPS SQL backup sync.
 
+The production target is Ubuntu 24.04 Server on bare metal.
+
+Before installing, confirm the host:
+
+```bash
+cat /etc/os-release
+systemctl --version
+df -h
+findmnt
+```
+
+If `/dailybackups` should use a dedicated disk, partition, LVM volume, or mounted storage path, mount that storage before running the sync in production.
+
 ## 1. Copy The Project To The VPS
 
 Use whichever deployment method is standard for the VPS.
@@ -35,6 +48,8 @@ This installs:
 /etc/rclone-gdrive-sql-backup-sync.env
 /etc/rclone-gdrive-sql-backup-sync/sql-backups.filter.example
 ```
+
+The installer validates that `rclone lsjson --metadata` is available. If the operating system package manager provides an older rclone, install a current rclone release from the official rclone downloads page and rerun the installer.
 
 It also creates:
 
@@ -100,11 +115,41 @@ Set at minimum:
 RCLONE_REMOTE_NAME="gdrive"
 GDRIVE_SOURCE_PATH="SQL Backups"
 VPS_DESTINATION_DIR="/dailybackups"
+RETENTION_POLICY="latest_per_financial_year"
+BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR="7"
+RETENTION_TIMESTAMP_MODE="latest_metadata_time"
 DRY_RUN="true"
 SYNC_MODE="sync"
+REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM="false"
 ```
 
 Keep `DRY_RUN="true"` for the first run.
+
+For bare-metal deployments where `/dailybackups` is expected to be on separate storage, set:
+
+```bash
+REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM="true"
+```
+
+Then verify:
+
+```bash
+findmnt -T /dailybackups
+```
+
+Confirm the Google Drive folder has financial-year folders directly under it:
+
+```text
+SQL Backups/FY2024-25/
+SQL Backups/FY2025-26/
+```
+
+The VPS will keep the same structure:
+
+```text
+/dailybackups/FY2024-25/
+/dailybackups/FY2025-26/
+```
 
 ## 5. Optional: Enable SQL File Filtering
 
@@ -148,7 +193,9 @@ Confirm:
 
 - Source is the correct Google Drive folder.
 - Destination is `/dailybackups`.
-- File names look like expected SQL backups.
+- Financial-year folder names match Google Drive.
+- Files selected for each financial year match latest Google Drive upload/update metadata.
+- The selection report shows no more than `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` files per financial year.
 - No unexpected delete actions are shown.
 - No unrelated personal or business files are selected.
 
@@ -175,7 +222,7 @@ sudo /usr/local/bin/rclone-gdrive-sql-backup-sync /etc/rclone-gdrive-sql-backup-
 Check files:
 
 ```bash
-sudo find /dailybackups -maxdepth 2 -type f | head -50
+sudo find /dailybackups -maxdepth 3 -type f | head -50
 sudo du -sh /dailybackups
 ```
 
@@ -190,6 +237,25 @@ Expected:
 ```text
 STATUS=success
 EXIT_CODE=0
+RETENTION_POLICY=latest_per_financial_year
+BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR=7
+RETENTION_TIMESTAMP_MODE=latest_metadata_time
+FILES_WITHOUT_RETENTION_TIMESTAMP=0
+```
+
+Check per-financial-year counts:
+
+```bash
+sudo find /dailybackups -mindepth 2 -maxdepth 2 -type f \
+  | awk -F/ '{count[$3]++} END {for (fy in count) print fy, count[fy]}'
+```
+
+Each financial-year folder should normally show 7 or fewer selected files, unless there are nested folders. For nested folder layouts, use:
+
+```bash
+for fy in /dailybackups/*; do
+  [ -d "$fy" ] && printf '%s %s\n' "$(basename "$fy")" "$(find "$fy" -type f | wc -l)"
+done
 ```
 
 ## 8. Optional: Run Post-Sync Verification

@@ -3,7 +3,11 @@
 This project starts with one production operations module:
 
 - Sync SQL backup files from Google Drive to a VPS folder named `dailybackups`.
+- Target production host: Ubuntu 24.04 Server on bare metal.
 - Use `rclone` as the sync engine.
+- Preserve Google Drive financial-year folders on the VPS.
+- Keep only the latest 5-7 backup files per financial-year folder locally.
+- Select latest files from Google Drive upload/update metadata, not filenames.
 - Run manually for validation, then automatically through `systemd`.
 - Keep implementation code and separate project documentation complete enough for interns, engineers, managers, and CTO-level review.
 
@@ -11,7 +15,7 @@ This project starts with one production operations module:
 
 | Module | Purpose | Main Files |
 | --- | --- | --- |
-| Google Drive to VPS SQL Backup Sync | Mirrors SQL backup files from a Google Drive folder into `/dailybackups` or another path ending in `dailybackups`. | `scripts/sync-google-drive-sql-backups.sh`, `config/rclone-gdrive-sql-backup-sync.env.example`, `systemd/rclone-gdrive-sql-backup-sync.*`, `docs/backup-sync/*` |
+| Google Drive to VPS SQL Backup Sync | Copies latest backup files from each Google Drive financial-year folder into matching `/dailybackups/<financial-year>/` folders and prunes older local copies. Latest is determined from upload/update metadata, not file name. | `scripts/sync-google-drive-sql-backups.sh`, `config/rclone-gdrive-sql-backup-sync.env.example`, `systemd/rclone-gdrive-sql-backup-sync.*`, `docs/backup-sync/*` |
 
 ## Fast Start On The VPS
 
@@ -40,10 +44,12 @@ Read the documentation in this order:
 3. `docs/backup-sync/03-logic-and-interconnections.md`
 4. `docs/backup-sync/04-runbook.md`
 5. `docs/backup-sync/05-security-and-troubleshooting.md`
+6. `docs/backup-sync/06-financial-year-retention.md`
+7. `docs/backup-sync/07-ubuntu-2404-baremetal-deployment.md`
 
 ## Important Safety Rule
 
-The default mode is `sync`, which means the VPS destination is made to match the Google Drive source. To reduce accidental data loss, deleted or overwritten destination files are archived by default under:
+The default retention policy is `latest_per_financial_year`, which means the VPS keeps only the latest configured backup files from each Google Drive financial-year folder. Older local files are archived by default under:
 
 ```text
 /var/backups/rclone-gdrive-sql-backup-sync/archive/<run-id>

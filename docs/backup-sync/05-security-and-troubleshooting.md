@@ -56,6 +56,8 @@ The repository includes `.gitignore` entries for common local secret files.
 
 `rclone sync` can delete files from the destination when they are absent from the source.
 
+The default financial-year retention policy also removes older local files from the VPS even when they still exist in Google Drive. This is intentional to control VPS storage.
+
 This module protects against immediate permanent deletion with:
 
 ```bash
@@ -75,6 +77,24 @@ Deleted or overwritten local files move to:
 ```
 
 Important: this archive still consumes VPS disk space. Decide on an archive retention policy before enabling `ARCHIVE_RETENTION_DAYS`.
+
+## Financial-Year Retention Safety
+
+When:
+
+```bash
+RETENTION_POLICY="latest_per_financial_year"
+```
+
+the VPS is not a full mirror of Google Drive. It is a local working set containing the latest selected backups per financial-year folder.
+
+Important assumptions:
+
+- Google Drive remains the full backup archive.
+- Each backup file is inside a top-level financial-year folder.
+- Google Drive/rclone upload or update metadata is the source of truth for latest-file selection.
+- `/dailybackups` is dedicated to this sync job.
+- Local files not selected by the retention calculation can be pruned.
 
 ## Recommended Production Controls
 
@@ -137,6 +157,33 @@ Then update:
 ```bash
 GDRIVE_SOURCE_PATH="correct/folder/path"
 ```
+
+## Troubleshooting: root-level files rejected
+
+Symptom:
+
+```text
+Root-level files found in the source.
+Refusing retention run because every backup file must be inside a top-level financial-year folder.
+```
+
+Cause:
+
+The source contains files directly under `GDRIVE_SOURCE_PATH` instead of inside a financial-year folder.
+
+Fix the Google Drive layout:
+
+```text
+SQL Backups/FY2025-26/prod-2026-05-06.sql.gz
+```
+
+If root-level files are intentional, set:
+
+```bash
+ALLOW_ROOT_LEVEL_BACKUP_FILES="true"
+```
+
+This is not recommended for production because those files are excluded from financial-year retention selection.
 
 ## Troubleshooting: destination folder rejected
 
