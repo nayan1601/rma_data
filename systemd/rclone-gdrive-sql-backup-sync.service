@@ -1,0 +1,21 @@
+[Unit]
+Description=Sync Google Drive SQL backups to VPS dailybackups folder
+Documentation=file:/etc/rclone-gdrive-sql-backup-sync.env
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/
+EnvironmentFile=-/etc/rclone-gdrive-sql-backup-sync.env
+ExecStart=/usr/local/bin/rclone-gdrive-sql-backup-sync /etc/rclone-gdrive-sql-backup-sync.env
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077
+TimeoutStartSec=12h
+
+[Install]
+WantedBy=multi-user.target

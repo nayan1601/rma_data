@@ -1,0 +1,28 @@
+# rclone filter example for SQL backup folders.
+#
+# Usage:
+#   sudo mkdir -p /etc/rclone-gdrive-sql-backup-sync
+#   sudo cp filters/sql-backups.filter.example \
+#     /etc/rclone-gdrive-sql-backup-sync/sql-backups.filter
+#   sudo nano /etc/rclone-gdrive-sql-backup-sync/sql-backups.filter
+#
+# Then set this in /etc/rclone-gdrive-sql-backup-sync.env:
+#   RCLONE_FILTER_FILE="/etc/rclone-gdrive-sql-backup-sync/sql-backups.filter"
+#
+# Rule logic:
+#   + */       lets rclone enter subfolders
+#   + patterns includes expected database backup extensions
+#   - *        excludes everything else
+
++ */
++ *.sql
++ *.sql.gz
++ *.sql.xz
++ *.sql.zst
++ *.dump
++ *.dump.gz
++ *.bak
++ *.bak.gz
++ *.zip
++ *.7z
+- *
