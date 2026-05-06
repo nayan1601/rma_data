@@ -1,0 +1,14 @@
+# Local secrets and generated runtime files
+*.env
+!*.env.example
+*.log
+
+# Local rclone configs or tokens must never be committed
+.rclone/
+rclone.conf
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

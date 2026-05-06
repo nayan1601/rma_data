@@ -1,0 +1,14 @@
+[Unit]
+Description=Run Google Drive SQL backup sync daily
+
+[Timer]
+# The time is interpreted in the VPS local timezone.
+# Change this if the database backup job finishes at a different time.
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=15m
+AccuracySec=1m
+Unit=rclone-gdrive-sql-backup-sync.service
+
+[Install]
+WantedBy=timers.target
