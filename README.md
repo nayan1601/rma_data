@@ -8,6 +8,8 @@ This project starts with one production operations module:
 - Preserve Google Drive financial-year folders on the VPS.
 - Keep only the latest 5-7 backup files per financial-year folder locally.
 - Select latest files from Google Drive upload/update metadata, not filenames.
+- Bootstrap missing Ubuntu requirements automatically during installation.
+- Create and validate required folders and permissions.
 - Run manually for validation, then automatically through `systemd`.
 - Keep implementation code and separate project documentation complete enough for interns, engineers, managers, and CTO-level review.
 
@@ -23,10 +25,12 @@ Run these commands after copying or cloning this repository onto the VPS:
 
 ```bash
 sudo bash scripts/install-rclone-google-drive-sync.sh
-rclone config
+sudo rclone config
 sudo nano /etc/rclone-gdrive-sql-backup-sync.env
 sudo /usr/local/bin/rclone-gdrive-sql-backup-sync /etc/rclone-gdrive-sql-backup-sync.env
 ```
+
+The installer is idempotent. Re-running it repairs missing packages, missing folders, installed script permissions, environment-file permissions, and the rclone binary if metadata support is missing.
 
 When the dry run is correct, set `DRY_RUN="false"` in `/etc/rclone-gdrive-sql-backup-sync.env`, run the script once again, and then enable the daily timer:
 

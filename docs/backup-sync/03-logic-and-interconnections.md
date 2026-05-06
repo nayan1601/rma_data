@@ -38,13 +38,14 @@ flowchart LR
 3. Sync script loads /etc/rclone-gdrive-sql-backup-sync.env.
 4. Script validates:
    - environment file exists
+   - booleans, integers, umask, and absolute paths are valid
    - rclone exists
    - rclone remote exists
    - Google Drive source path is specific
    - destination folder ends in dailybackups
    - optional filter file exists
    - destination filesystem has minimum required free space
-5. Script creates required runtime directories.
+5. Script creates required runtime directories if missing and verifies write access.
 6. Script opens a lock file with flock.
 7. Script calculates destination files and bytes before sync.
 8. Script builds rclone arguments.
@@ -71,6 +72,7 @@ if basename(VPS_DESTINATION_DIR) != "dailybackups":
     fail unless explicitly allowed
 
 create destination, log, state, and archive directories
+verify destination, log, state, and archive directories are writable
 
 open log file
 

@@ -36,6 +36,7 @@ The module is designed for operational use. It includes:
 - State summary in `/var/lib/rclone-gdrive-sql-backup-sync/last-run.env`.
 - Optional post-sync verification with `rclone check --one-way`.
 - Optional include filter for common SQL backup file extensions.
+- Automated installation and repair of required Ubuntu packages, runtime folders, and file permissions.
 
 ## Out Of Scope
 
@@ -74,7 +75,24 @@ The production VPS environment is:
 - Network access to Google Drive APIs.
 - rclone installed and configured.
 
-The install script is aligned with Ubuntu apt-based installation and still contains fallback handling for other common package managers.
+The install script is aligned with Ubuntu apt-based installation. It installs required packages with apt and upgrades rclone through the official rclone installer when the Ubuntu package does not support required metadata output.
+
+## Installer Responsibilities
+
+`scripts/install-rclone-google-drive-sync.sh` is responsible for:
+
+- Confirming it is running as root.
+- Detecting Ubuntu 24.04 context.
+- Installing required apt packages.
+- Installing or upgrading rclone if `rclone lsjson --metadata` is unavailable.
+- Installing `/usr/local/bin/rclone-gdrive-sql-backup-sync`.
+- Creating `/etc/rclone-gdrive-sql-backup-sync.env` if missing.
+- Preserving existing production env settings if the env file already exists.
+- Repairing env file permissions to `0600`.
+- Creating required runtime folders.
+- Verifying the runtime folders are writable.
+
+The installer cannot automate Google Drive authorization. `sudo rclone config` must still be completed by an operator.
 
 ## Required Google Drive Setup
 
@@ -181,6 +199,7 @@ The guard exists because the business requirement specifically names `dailybacku
 | rclone configured for one user but service runs as another | Run `rclone config` as the same user used by systemd, or set `RCLONE_CONFIG`. |
 | Google API or network failure | rclone retries plus non-zero exit code, logs, and failed state summary. |
 | Backup filename does not contain a useful date | Retention selection ignores filename and uses rclone/Google Drive metadata timestamps. |
+| Missing VPS dependency | Installer installs required packages; runtime fails clearly if a dependency is missing later. |
 
 ## Success Criteria
 

@@ -21,7 +21,7 @@
 
 set -Eeuo pipefail
 
-SCRIPT_NAME="$(basename "$0")"
+SCRIPT_NAME="${0##*/}"
 DEFAULT_ENV_FILE="/etc/rclone-gdrive-sql-backup-sync.env"
 ENV_FILE="${1:-${BACKUP_SYNC_ENV_FILE:-$DEFAULT_ENV_FILE}}"
 
@@ -60,7 +60,32 @@ is_true() {
 }
 
 require_command() {
-  command -v "$1" >/dev/null 2>&1 || fail "Required command '$1' is not installed or not in PATH."
+  command -v "$1" >/dev/null 2>&1 || fail "Required command '$1' is not installed or not in PATH. Re-run the installer from the repository: sudo bash scripts/install-rclone-google-drive-sync.sh"
+}
+
+require_absolute_path() {
+  local value="$1"
+  local name="$2"
+
+  [[ -n "$value" ]] || fail "$name must not be empty."
+  [[ "$value" == /* ]] || fail "$name must be an absolute path. Current value: $value"
+}
+
+validate_integer() {
+  local value="$1"
+  local name="$2"
+
+  [[ "$value" =~ ^[0-9]+$ ]] || fail "$name must be an integer. Current value: $value"
+}
+
+validate_bool() {
+  local value="$1"
+  local name="$2"
+
+  case "$value" in
+    true | TRUE | True | 1 | yes | YES | y | Y | false | FALSE | False | 0 | no | NO | n | N) ;;
+    *) fail "$name must be true or false. Current value: $value" ;;
+  esac
 }
 
 require_rclone_metadata_support() {
@@ -97,6 +122,29 @@ get_available_bytes() {
 get_destination_mount_target() {
   local dir="$1"
   findmnt -n -T "$dir" -o TARGET
+}
+
+ensure_directory() {
+  local path="$1"
+  local mode="$2"
+  local description="$3"
+  local probe
+
+  require_absolute_path "$path" "$description"
+
+  if [[ -e "$path" && ! -d "$path" ]]; then
+    fail "$description exists but is not a directory: $path"
+  fi
+
+  mkdir -p "$path"
+
+  if [[ "${EUID}" -eq 0 ]]; then
+    chmod "$mode" "$path"
+  fi
+
+  probe="${path}/.backup-sync-write-test"
+  : >"$probe" || fail "$description is not writable: $path"
+  rm -f -- "$probe"
 }
 
 write_kv() {
@@ -532,6 +580,8 @@ LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-30}"
 ARCHIVE_RETENTION_DAYS="${ARCHIVE_RETENTION_DAYS:-0}"
 
 if [[ -n "${RCLONE_CONFIG:-}" ]]; then
+  require_absolute_path "$RCLONE_CONFIG" "RCLONE_CONFIG"
+  [[ -f "$RCLONE_CONFIG" ]] || fail "RCLONE_CONFIG is set but the file does not exist: $RCLONE_CONFIG"
   export RCLONE_CONFIG
 fi
 
@@ -545,11 +595,29 @@ case "$SYNC_MODE" in
   *) fail "SYNC_MODE must be either sync or copy. Current value: $SYNC_MODE" ;;
 esac
 
-if [[ "$RETENTION_POLICY" == "latest_per_financial_year" ]]; then
-  if [[ ! "$BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR" =~ ^[0-9]+$ ]]; then
-    fail "BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR must be an integer."
-  fi
+validate_bool "$DRY_RUN" "DRY_RUN"
+validate_bool "$ALLOW_NON_DAILYBACKUPS_DESTINATION" "ALLOW_NON_DAILYBACKUPS_DESTINATION"
+validate_bool "$ARCHIVE_DELETED_FILES" "ARCHIVE_DELETED_FILES"
+validate_bool "$RCLONE_FAST_LIST" "RCLONE_FAST_LIST"
+validate_bool "$VERIFY_WITH_CHECKSUM" "VERIFY_WITH_CHECKSUM"
+validate_bool "$POST_SYNC_CHECK" "POST_SYNC_CHECK"
+validate_bool "$ALLOW_ROOT_LEVEL_BACKUP_FILES" "ALLOW_ROOT_LEVEL_BACKUP_FILES"
+validate_bool "$REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM" "REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM"
 
+validate_integer "$BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR" "BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR"
+validate_integer "$RCLONE_TRANSFERS" "RCLONE_TRANSFERS"
+validate_integer "$RCLONE_CHECKERS" "RCLONE_CHECKERS"
+validate_integer "$RCLONE_RETRIES" "RCLONE_RETRIES"
+validate_integer "$RCLONE_LOW_LEVEL_RETRIES" "RCLONE_LOW_LEVEL_RETRIES"
+validate_integer "$MIN_FREE_SPACE_BYTES" "MIN_FREE_SPACE_BYTES"
+validate_integer "$LOG_RETENTION_DAYS" "LOG_RETENTION_DAYS"
+validate_integer "$ARCHIVE_RETENTION_DAYS" "ARCHIVE_RETENTION_DAYS"
+
+if [[ ! "$FILE_UMASK" =~ ^[0-7]{3,4}$ ]]; then
+  fail "FILE_UMASK must be a valid octal umask such as 077. Current value: $FILE_UMASK"
+fi
+
+if [[ "$RETENTION_POLICY" == "latest_per_financial_year" ]]; then
   if (( BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR < 5 || BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR > 7 )); then
     fail "BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR must be between 5 and 7."
   fi
@@ -564,13 +632,19 @@ if [[ -z "$GDRIVE_SOURCE_PATH" || "$GDRIVE_SOURCE_PATH" == "/" || "$GDRIVE_SOURC
   fail "GDRIVE_SOURCE_PATH must point to a specific Google Drive backup folder. Refusing to use Drive root."
 fi
 
-destination_leaf="$(basename "$VPS_DESTINATION_DIR")"
+destination_path_without_trailing_slash="${VPS_DESTINATION_DIR%/}"
+destination_leaf="${destination_path_without_trailing_slash##*/}"
 if [[ "$destination_leaf" != "dailybackups" ]] && ! is_true "$ALLOW_NON_DAILYBACKUPS_DESTINATION"; then
   fail "VPS_DESTINATION_DIR must end in dailybackups. Current value: $VPS_DESTINATION_DIR"
 fi
 
-if [[ ! "$MIN_FREE_SPACE_BYTES" =~ ^[0-9]+$ ]]; then
-  fail "MIN_FREE_SPACE_BYTES must be an integer number of bytes."
+require_absolute_path "$VPS_DESTINATION_DIR" "VPS_DESTINATION_DIR"
+require_absolute_path "$LOG_DIR" "LOG_DIR"
+require_absolute_path "$STATE_DIR" "STATE_DIR"
+require_absolute_path "$ARCHIVE_BASE_DIR" "ARCHIVE_BASE_DIR"
+
+if [[ -n "$RCLONE_FILTER_FILE" ]]; then
+  require_absolute_path "$RCLONE_FILTER_FILE" "RCLONE_FILTER_FILE"
 fi
 
 umask "$FILE_UMASK"
@@ -583,6 +657,11 @@ require_command "du"
 require_command "awk"
 require_command "df"
 require_command "findmnt"
+require_command "mkdir"
+require_command "chmod"
+require_command "dirname"
+require_command "mv"
+require_command "rm"
 require_command "tee"
 require_command "grep"
 require_command "sed"
@@ -592,7 +671,10 @@ if [[ "$RETENTION_POLICY" == "latest_per_financial_year" ]]; then
   require_rclone_metadata_support
 fi
 
-mkdir -p "$VPS_DESTINATION_DIR" "$LOG_DIR" "$STATE_DIR" "$ARCHIVE_BASE_DIR"
+ensure_directory "$VPS_DESTINATION_DIR" "0750" "VPS_DESTINATION_DIR"
+ensure_directory "$LOG_DIR" "0750" "LOG_DIR"
+ensure_directory "$STATE_DIR" "0750" "STATE_DIR"
+ensure_directory "$ARCHIVE_BASE_DIR" "0750" "ARCHIVE_BASE_DIR"
 
 LOG_FILE="${LOG_DIR}/sync-${RUN_ID}.log"
 exec > >(tee -a "$LOG_FILE") 2>&1

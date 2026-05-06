@@ -67,6 +67,22 @@ VPS_DESTINATION_DIR="/backups"
 | `MIN_FREE_SPACE_BYTES` | Integer bytes | `10737418240` | Minimum free bytes required before sync starts. |
 | `REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM` | `true`, `false` | `false` | If true, fails when `/dailybackups` is on the root filesystem. Useful on Ubuntu 24.04 bare metal. |
 
+## Runtime Validation Inputs
+
+The sync script validates configuration before contacting Google Drive.
+
+Validation includes:
+
+- Boolean values must be true/false style values.
+- Count and retention values must be integers.
+- `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` must be between 5 and 7.
+- `VPS_DESTINATION_DIR`, `LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR` must be absolute paths.
+- `RCLONE_FILTER_FILE` must be an absolute path when set.
+- `RCLONE_CONFIG` must be an absolute existing file when set.
+- `FILE_UMASK` must be a valid octal umask.
+- Required folders are created if missing.
+- Required folders must be writable by the running user.
+
 ## Financial-Year Input Format
 
 When:

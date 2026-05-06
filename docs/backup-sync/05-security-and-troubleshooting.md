@@ -106,6 +106,19 @@ Important assumptions:
 - Run a restore drill in a separate project module.
 - Define business retention for both Google Drive backups and VPS local archives.
 
+## Installer Repair Behavior
+
+The installer can be rerun after partial setup or package drift. It repairs:
+
+- Missing apt packages.
+- Missing or old rclone binary.
+- Missing installed sync script.
+- Missing runtime folders.
+- Unsafe env file permissions.
+- Missing filter example.
+
+It does not overwrite an existing `/etc/rclone-gdrive-sql-backup-sync.env` file.
+
 ## Troubleshooting: rclone remote not found
 
 Symptom:
@@ -124,8 +137,8 @@ Causes:
 Fix:
 
 ```bash
-sudo rclone listremotes
 sudo rclone config
+sudo rclone listremotes
 ```
 
 or set:

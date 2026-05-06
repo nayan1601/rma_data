@@ -52,13 +52,22 @@ sudo apt-get update
 sudo apt-get install -y rclone util-linux coreutils findutils gawk grep jq
 ```
 
+The project installer also installs `ca-certificates`, `curl`, and `unzip` because they are needed for robust bootstrapping and official rclone installation.
+
 The installer then validates:
 
 ```bash
 rclone lsjson --help | grep -- --metadata
 ```
 
-If the Ubuntu package does not support `lsjson --metadata`, install a current rclone release and rerun:
+If the Ubuntu package does not support `lsjson --metadata`, the installer downloads and runs the official rclone install script automatically:
+
+```bash
+curl -fsSL https://rclone.org/install.sh -o /tmp/install-rclone.sh
+bash /tmp/install-rclone.sh
+```
+
+The command above is shown for clarity; the project installer handles it. Re-run:
 
 ```bash
 sudo bash scripts/install-rclone-google-drive-sync.sh

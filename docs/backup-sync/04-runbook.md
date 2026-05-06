@@ -41,6 +41,8 @@ Run:
 sudo bash scripts/install-rclone-google-drive-sync.sh
 ```
 
+The installer is safe to rerun. It repairs the installation without overwriting the existing production env file.
+
 This installs:
 
 ```text
@@ -49,7 +51,13 @@ This installs:
 /etc/rclone-gdrive-sql-backup-sync/sql-backups.filter.example
 ```
 
-The installer validates that `rclone lsjson --metadata` is available. If the operating system package manager provides an older rclone, install a current rclone release from the official rclone downloads page and rerun the installer.
+The installer:
+
+- Installs required Ubuntu packages.
+- Installs or upgrades rclone if `rclone lsjson --metadata` is unavailable.
+- Creates missing runtime folders.
+- Repairs environment-file permissions to `0600`.
+- Verifies runtime folders are writable.
 
 It also creates:
 
@@ -62,10 +70,10 @@ It also creates:
 
 ## 3. Configure rclone For Google Drive
 
-Run:
+Run as root because the systemd service also runs as root:
 
 ```bash
-rclone config
+sudo rclone config
 ```
 
 Recommended choices:
@@ -83,7 +91,7 @@ For a headless VPS, rclone may ask you to authorize from a machine with a browse
 After configuration, confirm the remote exists:
 
 ```bash
-rclone listremotes
+sudo rclone listremotes
 ```
 
 Expected:
@@ -95,8 +103,8 @@ gdrive:
 Check the backup folder can be listed:
 
 ```bash
-rclone lsd "gdrive:"
-rclone ls "gdrive:SQL Backups" --max-depth 1
+sudo rclone lsd "gdrive:"
+sudo rclone ls "gdrive:SQL Backups" --max-depth 1
 ```
 
 Replace `SQL Backups` with the real Google Drive folder path.
@@ -277,6 +285,8 @@ Run:
 ```bash
 sudo bash scripts/install-systemd-google-drive-sync.sh
 ```
+
+This script runs the base installer first if the installed binary or env file is missing.
 
 Confirm timer:
 

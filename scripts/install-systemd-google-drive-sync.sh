@@ -2,49 +2,104 @@
 #
 # Install and enable the systemd timer for daily Google Drive SQL backup sync.
 #
-# Run after scripts/install-rclone-google-drive-sync.sh and after rclone config
-# has been completed for the user that will run the service.
+# This script is idempotent. It installs the base sync module first if needed,
+# validates systemd availability, verifies unit syntax when possible, then
+# enables the timer.
 
 set -Eeuo pipefail
-
-if [[ "${EUID}" -ne 0 ]]; then
-  printf 'ERROR: Run as root, for example: sudo bash scripts/install-systemd-google-drive-sync.sh\n' >&2
-  exit 1
-fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+BASE_INSTALLER="${REPO_ROOT}/scripts/install-rclone-google-drive-sync.sh"
 SERVICE_SOURCE="${REPO_ROOT}/systemd/rclone-gdrive-sql-backup-sync.service"
 TIMER_SOURCE="${REPO_ROOT}/systemd/rclone-gdrive-sql-backup-sync.timer"
 SERVICE_TARGET="/etc/systemd/system/rclone-gdrive-sql-backup-sync.service"
 TIMER_TARGET="/etc/systemd/system/rclone-gdrive-sql-backup-sync.timer"
+SYNC_SCRIPT_TARGET="/usr/local/bin/rclone-gdrive-sql-backup-sync"
+ENV_TARGET="/etc/rclone-gdrive-sql-backup-sync.env"
 
-[[ -f "$SERVICE_SOURCE" ]] || {
-  printf 'ERROR: Missing service unit: %s\n' "$SERVICE_SOURCE" >&2
+print() {
+  printf '%s\n' "$*"
+}
+
+fail() {
+  printf 'ERROR: %s\n' "$*" >&2
   exit 1
 }
 
-[[ -f "$TIMER_SOURCE" ]] || {
-  printf 'ERROR: Missing timer unit: %s\n' "$TIMER_SOURCE" >&2
-  exit 1
+require_root() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    fail "Run as root, for example: sudo bash scripts/install-systemd-google-drive-sync.sh"
+  fi
 }
 
-[[ -x /usr/local/bin/rclone-gdrive-sql-backup-sync ]] || {
-  printf 'ERROR: Missing /usr/local/bin/rclone-gdrive-sql-backup-sync. Run install-rclone-google-drive-sync.sh first.\n' >&2
-  exit 1
+require_file() {
+  local path="$1"
+  [[ -f "$path" ]] || fail "Missing required file: $path"
 }
 
-install -m 0644 "$SERVICE_SOURCE" "$SERVICE_TARGET"
-install -m 0644 "$TIMER_SOURCE" "$TIMER_TARGET"
+require_command() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 || fail "Missing required command: $cmd"
+}
 
-systemctl daemon-reload
-systemctl enable --now rclone-gdrive-sql-backup-sync.timer
+ensure_base_installation() {
+  if [[ -x "$SYNC_SCRIPT_TARGET" && -f "$ENV_TARGET" ]]; then
+    print "Base sync installation already present."
+    return
+  fi
 
-printf 'Installed and enabled systemd timer.\n'
-printf 'Timer status:\n'
-systemctl list-timers --all rclone-gdrive-sql-backup-sync.timer || true
-printf '\nUseful commands:\n'
-printf '  sudo systemctl start rclone-gdrive-sql-backup-sync.service\n'
-printf '  sudo systemctl status rclone-gdrive-sql-backup-sync.service\n'
-printf '  sudo journalctl -u rclone-gdrive-sql-backup-sync.service -n 100 --no-pager\n'
+  require_file "$BASE_INSTALLER"
+  print "Base sync installation is incomplete. Running base installer first."
+  bash "$BASE_INSTALLER"
+}
+
+validate_systemd() {
+  require_command systemctl
+
+  if [[ ! -d /run/systemd/system ]]; then
+    fail "systemd does not appear to be PID 1 on this host. Timer installation requires systemd."
+  fi
+}
+
+install_units() {
+  require_file "$SERVICE_SOURCE"
+  require_file "$TIMER_SOURCE"
+  [[ -x "$SYNC_SCRIPT_TARGET" ]] || fail "Missing executable sync script: $SYNC_SCRIPT_TARGET"
+  [[ -f "$ENV_TARGET" ]] || fail "Missing environment file: $ENV_TARGET"
+
+  install -m 0644 "$SERVICE_SOURCE" "$SERVICE_TARGET"
+  install -m 0644 "$TIMER_SOURCE" "$TIMER_TARGET"
+  chown root:root "$SERVICE_TARGET" "$TIMER_TARGET"
+
+  if command -v systemd-analyze >/dev/null 2>&1; then
+    systemd-analyze verify "$SERVICE_TARGET" "$TIMER_TARGET"
+  fi
+}
+
+enable_timer() {
+  systemctl daemon-reload
+  systemctl enable --now rclone-gdrive-sql-backup-sync.timer
+}
+
+print_status() {
+  print "Installed and enabled systemd timer."
+  print "Timer status:"
+  systemctl list-timers --all rclone-gdrive-sql-backup-sync.timer || true
+
+  cat <<EOF
+
+Useful commands:
+  sudo systemctl start rclone-gdrive-sql-backup-sync.service
+  sudo systemctl status rclone-gdrive-sql-backup-sync.service
+  sudo journalctl -u rclone-gdrive-sql-backup-sync.service -n 100 --no-pager
+EOF
+}
+
+require_root
+validate_systemd
+ensure_base_installation
+install_units
+enable_timer
+print_status
