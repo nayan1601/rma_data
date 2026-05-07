@@ -22,11 +22,10 @@ When changing this repository, run the local validation suite before installing 
 ```bash
 bash -n scripts/*.sh tests/*.sh
 shellcheck scripts/*.sh tests/*.sh
-tests/run-backup-sync-tests.sh
 tests/test-sync-google-drive-sql-backups.sh
 ```
 
-The offline test harnesses create temporary fake `rclone` commands and controlled remote metadata. They check latest-per-financial-year selection, dry-run non-mutation, archive/prune behavior, unsafe archive placement, root-level source rejection, post-sync verification, and last-run summary fields without needing Google Drive credentials.
+The offline test harness creates a temporary fake `rclone` command and controlled remote metadata. It checks latest-per-financial-year selection, dry-run non-mutation, archive/prune behavior, unsafe runtime-path placement, root-level source rejection, post-sync verification, and last-run summary fields without needing Google Drive credentials.
 
 ## 1. Copy The Project To The VPS
 
@@ -142,9 +141,12 @@ RETENTION_TIMESTAMP_MODE="latest_metadata_time"
 DRY_RUN="true"
 SYNC_MODE="sync"
 REQUIRE_DESTINATION_NOT_ON_ROOT_FILESYSTEM="false"
+LOG_DIR="/var/log/rclone-gdrive-sql-backup-sync"
+STATE_DIR="/var/lib/rclone-gdrive-sql-backup-sync"
+ARCHIVE_BASE_DIR="/var/backups/rclone-gdrive-sql-backup-sync/archive"
 ```
 
-Keep `DRY_RUN="true"` for the first run.
+Keep `DRY_RUN="true"` for the first run. Keep `LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR` outside `/dailybackups`; the sync script rejects these paths if they are inside the managed destination tree.
 
 For bare-metal deployments where `/dailybackups` is expected to be on separate storage, set:
 
@@ -217,7 +219,7 @@ Confirm:
 - Financial-year folder names match Google Drive.
 - Files selected for each financial year match latest Google Drive upload/update metadata.
 - The selection report shows no more than `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` files per financial year.
-- No unexpected delete actions are shown.
+- No unexpected delete or retention-prune actions are shown.
 - No unrelated personal or business files are selected.
 
 ## 7. Run A Real Sync

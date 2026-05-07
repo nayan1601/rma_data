@@ -40,7 +40,7 @@ Confirm:
 
 - OS is Ubuntu 24.04.
 - systemd is available.
-- destination storage has enough capacity.
+- destination storage has enough capacity for the selected retention set.
 - the server can reach Google Drive APIs.
 
 ## Recommended Ubuntu Package Baseline

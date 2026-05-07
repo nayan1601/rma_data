@@ -61,7 +61,7 @@ VPS_DESTINATION_DIR="/backups"
 | `RETENTION_TIMESTAMP_MODE` | `latest_metadata_time`, `upload_time`, `modified_time`, `rclone_modtime` | `latest_metadata_time` | Controls which rclone/Google Drive metadata timestamp defines latest. Filename is never used. |
 | `ALLOW_ROOT_LEVEL_BACKUP_FILES` | `true`, `false` | `false` | If false, source files not inside a financial-year folder cause failure. |
 | `SYNC_MODE` | `sync`, `copy` | `sync` | Used only when `RETENTION_POLICY="none"`. |
-| `ARCHIVE_DELETED_FILES` | `true`, `false` | `true` | Archives destination files deleted or overwritten by sync. |
+| `ARCHIVE_DELETED_FILES` | `true`, `false` | `true` | Archives destination files deleted, overwritten, or pruned by retention. |
 | `ARCHIVE_BASE_DIR` | Absolute path | `/var/backups/rclone-gdrive-sql-backup-sync/archive` | Parent folder for deletion archives. |
 | `RCLONE_FILTER_FILE` | File path or empty | empty | Optional rclone filter file. |
 | `MIN_FREE_SPACE_BYTES` | Integer bytes | `10737418240` | Minimum free bytes required before sync starts. |
@@ -76,8 +76,9 @@ Validation includes:
 - Boolean values must be true/false style values.
 - Count and retention values must be integers.
 - `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` must be between 5 and 7.
-- `VPS_DESTINATION_DIR`, `LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR` must be absolute paths.
-- `ARCHIVE_BASE_DIR` must not be `VPS_DESTINATION_DIR` or any child path under it; otherwise retention pruning could process archived files as backup files.
+- `GDRIVE_SOURCE_PATH` must identify a specific Drive folder and must not contain `.` or `..` path segments.
+- `VPS_DESTINATION_DIR`, `LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR` must be absolute managed paths and must not point at broad system directories.
+- `LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR` must be separate directories outside `VPS_DESTINATION_DIR`; otherwise retention pruning could process runtime files as backup files.
 - `RCLONE_FILTER_FILE` must be an absolute path when set.
 - `RCLONE_CONFIG` must be an absolute existing file when set.
 - `FILE_UMASK` must be a valid octal umask.
@@ -169,7 +170,7 @@ Example:
 gdrive:SQL Backups
 ```
 
-If `GDRIVE_SOURCE_PATH` starts with `/`, the script removes the first leading slash before passing it to rclone. This keeps Drive paths consistent.
+If `GDRIVE_SOURCE_PATH` starts or ends with `/`, the script strips those slashes before passing it to rclone. Repeated slashes are collapsed. If nothing remains, the script refuses to run. This keeps Drive paths consistent while preventing accidental Drive-root syncs.
 
 The script refuses these source paths:
 
@@ -179,7 +180,7 @@ The script refuses these source paths:
 "."
 ```
 
-Reason: syncing the Google Drive root is too broad and risky.
+Reason: syncing the Google Drive root is too broad and risky. Dot segments and parent-directory traversal such as `./Backups` or `../Backups` are also rejected.
 
 ## Destination Path Format
 
@@ -197,7 +198,7 @@ Also valid:
 /mnt/storage/dailybackups
 ```
 
-The script creates the destination folder if it does not exist.
+The script creates the destination folder if it does not exist. Managed runtime directories (`LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR`) must be separate from each other and must not be inside `VPS_DESTINATION_DIR`, because retention pruning intentionally manages files under the destination tree.
 
 ## Calculations Performed By The Script
 

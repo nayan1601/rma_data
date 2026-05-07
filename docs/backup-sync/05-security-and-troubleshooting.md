@@ -56,7 +56,7 @@ The repository includes `.gitignore` entries for common local secret files.
 
 `rclone sync` can delete files from the destination when they are absent from the source.
 
-The default financial-year retention policy also removes older local files from the VPS even when they still exist in Google Drive. This is intentional to control VPS storage.
+The default financial-year retention policy also removes older local files from the VPS even when they still exist in Google Drive. This is intentional to control VPS storage. For that reason, keep logs, state files, and archive storage outside `/dailybackups`; the scripts reject those runtime paths if they are inside the managed destination.
 
 This module protects against immediate permanent deletion with:
 

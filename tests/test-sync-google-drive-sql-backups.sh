@@ -294,8 +294,126 @@ run_root_level_rejection_test() {
   printf 'ok - root-level backup files are rejected by default\n'
 }
 
+run_drive_root_path_rejection_test() {
+  local case_dir="${TEST_ROOT}/drive-root"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${case_dir}/state"
+  local archive_dir="${case_dir}/archive"
+
+  mkdir -p "$case_dir" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir"
+  write_fake_rclone "$fake_rclone"
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+  sed -i 's|^GDRIVE_SOURCE_PATH=.*|GDRIVE_SOURCE_PATH="//"|' "$env_file"
+
+  if bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1; then
+    fail "Expected all-slashes Google Drive source path validation to fail"
+  fi
+
+  assert_contains "${case_dir}/run.out" 'GDRIVE_SOURCE_PATH must point to a specific Google Drive backup folder\.'
+  assert_contains "${state_dir}/last-run.env" '^STATUS=failed$'
+  printf 'ok - all-slashes Google Drive source paths are rejected\n'
+}
+
+run_drive_dot_segment_rejection_test() {
+  local case_dir="${TEST_ROOT}/drive-dot-segment"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${case_dir}/state"
+  local archive_dir="${case_dir}/archive"
+
+  mkdir -p "$case_dir" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir"
+  write_fake_rclone "$fake_rclone"
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+  sed -i 's|^GDRIVE_SOURCE_PATH=.*|GDRIVE_SOURCE_PATH="./SQL Backups"|' "$env_file"
+
+  if bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1; then
+    fail "Expected Google Drive source path dot-segment validation to fail"
+  fi
+
+  assert_contains "${case_dir}/run.out" 'dot segments'
+  assert_contains "${state_dir}/last-run.env" '^STATUS=failed$'
+  printf 'ok - Google Drive source dot segments are rejected\n'
+}
+
+run_runtime_directory_inside_destination_rejection_test() {
+  local case_dir="${TEST_ROOT}/unsafe-runtime-dir"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${case_dir}/state"
+  local archive_dir="${dest_dir}/archive"
+
+  mkdir -p "$case_dir" "$dest_dir" "$log_dir" "$state_dir"
+  write_fake_rclone "$fake_rclone"
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+
+  if bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1; then
+    fail "Expected archive directory inside destination validation to fail"
+  fi
+
+  assert_contains "${case_dir}/run.out" 'must not be inside VPS_DESTINATION_DIR'
+  assert_contains "${state_dir}/last-run.env" '^STATUS=failed$'
+  printf 'ok - runtime directories inside the managed destination are rejected\n'
+}
+
+run_state_directory_inside_destination_no_summary_test() {
+  local case_dir="${TEST_ROOT}/unsafe-state-inside-destination"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${dest_dir}/state"
+  local archive_dir="${case_dir}/archive"
+
+  mkdir -p "$case_dir" "$dest_dir" "$log_dir" "$archive_dir"
+  write_fake_rclone "$fake_rclone"
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+
+  if bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1; then
+    fail "Expected state directory inside destination validation to fail"
+  fi
+
+  assert_contains "${case_dir}/run.out" 'must not be inside VPS_DESTINATION_DIR'
+  assert_file_missing "$state_dir"
+  printf 'ok - unsafe state directories inside the destination do not receive summaries\n'
+}
+
+run_unsafe_state_directory_rejection_test() {
+  local case_dir="${TEST_ROOT}/unsafe-state-dir"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${case_dir}/state/.."
+  local archive_dir="${case_dir}/archive"
+
+  mkdir -p "$case_dir" "$dest_dir" "$log_dir" "$archive_dir" "${case_dir}/state"
+  write_fake_rclone "$fake_rclone"
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+
+  if bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1; then
+    fail "Expected unsafe state directory validation to fail"
+  fi
+
+  assert_contains "${case_dir}/run.out" 'STATE_DIR must not contain \. or \.\. path segments'
+  assert_file_missing "${case_dir}/last-run.env"
+  assert_file_missing "${case_dir}/state/last-run.env"
+  printf 'ok - unsafe state directories are rejected without writing a summary there\n'
+}
+
 bash -n "$SYNC_SCRIPT"
 run_retention_prune_test
 run_dry_run_safety_test
 run_root_level_rejection_test
+run_drive_root_path_rejection_test
+run_drive_dot_segment_rejection_test
+run_runtime_directory_inside_destination_rejection_test
+run_state_directory_inside_destination_no_summary_test
+run_unsafe_state_directory_rejection_test
 printf 'All sync robustness tests passed.\n'

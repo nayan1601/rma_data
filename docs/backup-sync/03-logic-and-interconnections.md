@@ -10,7 +10,7 @@
 | Destination folder | `/dailybackups` | Stores the latest selected SQL backup files under financial-year folders. |
 | Log folder | `/var/log/rclone-gdrive-sql-backup-sync` | Stores per-run text logs. |
 | State folder | `/var/lib/rclone-gdrive-sql-backup-sync` | Stores lock file and last-run summary. |
-| Archive folder | `/var/backups/rclone-gdrive-sql-backup-sync/archive` | Stores destination files deleted or overwritten by sync. |
+| Archive folder | `/var/backups/rclone-gdrive-sql-backup-sync/archive` | Stores destination files deleted, overwritten, or pruned by retention. |
 | systemd service | `/etc/systemd/system/rclone-gdrive-sql-backup-sync.service` | Runs one sync job. |
 | systemd timer | `/etc/systemd/system/rclone-gdrive-sql-backup-sync.timer` | Starts the service every 30 minutes. |
 
@@ -36,26 +36,29 @@ flowchart LR
 1. systemd timer fires, or an operator runs the script manually.
 2. systemd service starts the sync script.
 3. Sync script loads /etc/rclone-gdrive-sql-backup-sync.env.
-4. Script validates:
+4. Script normalizes source and local managed paths.
+5. Script validates:
    - environment file exists
    - booleans, integers, umask, and absolute paths are valid
+   - Google Drive source path is specific and not Drive root
+   - destination folder ends in dailybackups unless explicitly allowed
+   - destination, log, state, and archive paths are not broad system directories
+   - log, state, and archive paths are outside the managed destination tree
    - rclone exists
    - rclone remote exists
-   - Google Drive source path is specific
-   - destination folder ends in dailybackups
    - optional filter file exists
    - destination filesystem has minimum required free space
-5. Script creates required runtime directories if missing and verifies write access.
-6. Script opens a lock file with flock.
-7. Script calculates destination files and bytes before sync.
-8. Script builds rclone arguments.
-9. If financial-year retention is enabled, script lists remote files with metadata, selects latest N per financial year by metadata timestamp, copies selected files, and prunes older local files.
-10. If financial-year retention is disabled, script runs standard rclone sync or copy.
-11. If enabled, script runs rclone check --one-way.
-12. Script removes old logs and old archive folders if retention is enabled.
-13. Script calculates destination files and bytes after sync.
-14. Script writes /var/lib/rclone-gdrive-sql-backup-sync/last-run.env.
-15. Script exits with success or failure.
+6. Script creates required runtime directories if missing and verifies write access.
+7. Script opens a lock file with flock.
+8. Script calculates destination files and bytes before sync.
+9. Script builds rclone arguments.
+10. If financial-year retention is enabled, script lists remote files with metadata, selects latest N per financial year by metadata timestamp, copies selected files, and prunes older local files.
+11. If financial-year retention is disabled, script runs standard rclone sync or copy.
+12. If enabled, script runs rclone check --one-way.
+13. Script removes old logs and old archive folders if retention is enabled.
+14. Script calculates destination files and bytes after sync.
+15. Script writes /var/lib/rclone-gdrive-sql-backup-sync/last-run.env.
+16. Script exits with success or failure.
 ```
 
 ## Pseudocode
@@ -65,11 +68,24 @@ load ENV_FILE
 
 set defaults for optional values
 
-if GDRIVE_SOURCE_PATH is empty or root:
-    fail
-
+normalize destination, log, state, and archive paths
 if basename(VPS_DESTINATION_DIR) != "dailybackups":
     fail unless explicitly allowed
+
+if destination, log, state, or archive path is a broad system directory:
+    fail
+
+if STATE_DIR is inside VPS_DESTINATION_DIR or points to LOG_DIR/ARCHIVE_BASE_DIR:
+    fail
+
+mark STATE_DIR safe for failure summaries
+
+if log or archive path is inside VPS_DESTINATION_DIR or both point to the same directory:
+    fail
+
+normalize GDRIVE_SOURCE_PATH by stripping leading/trailing slashes and collapsing repeated slashes
+if normalized source path is empty, root, or uses dot/parent-directory segments:
+    fail
 
 create destination, log, state, and archive directories
 verify destination, log, state, and archive directories are writable

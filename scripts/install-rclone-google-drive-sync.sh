@@ -27,6 +27,7 @@ DEFAULT_DESTINATION_DIR="/dailybackups"
 DEFAULT_LOG_DIR="/var/log/rclone-gdrive-sql-backup-sync"
 DEFAULT_STATE_DIR="/var/lib/rclone-gdrive-sql-backup-sync"
 DEFAULT_ARCHIVE_BASE_DIR="/var/backups/rclone-gdrive-sql-backup-sync/archive"
+ALLOW_NON_DAILYBACKUPS_DESTINATION="false"
 
 APT_PACKAGES=(
   ca-certificates
@@ -172,21 +173,125 @@ install_project_files() {
   chown root:root "$FILTER_EXAMPLE_TARGET"
 }
 
+strip_trailing_slashes() {
+  local value="$1"
+
+  while [[ "$value" != "/" && "$value" == */ ]]; do
+    value="${value%/}"
+  done
+
+  printf '%s' "$value"
+}
+
+collapse_repeated_slashes() {
+  local value="$1"
+  local result=""
+  local char
+  local previous_was_slash="false"
+  local i
+
+  for ((i = 0; i < ${#value}; i++)); do
+    char="${value:i:1}"
+    if [[ "$char" == "/" ]]; then
+      if [[ "$previous_was_slash" != "true" ]]; then
+        result+="/"
+        previous_was_slash="true"
+      fi
+    else
+      result+="$char"
+      previous_was_slash="false"
+    fi
+  done
+
+  printf '%s' "$result"
+}
+
+normalize_managed_path() {
+  local value="$1"
+
+  value="$(collapse_repeated_slashes "$value")"
+  strip_trailing_slashes "$value"
+}
+
+is_true() {
+  case "${1:-}" in
+    true | TRUE | True | 1 | yes | YES | y | Y) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+require_managed_path_safe() {
+  local path
+  local description="$2"
+
+  path="$(normalize_managed_path "$1")"
+
+  [[ -n "$path" ]] || fail "$description path is empty."
+  [[ "$path" == /* ]] || fail "$description path must be absolute: $path"
+
+  case "$path" in
+    / | /bin | /boot | /dev | /etc | /home | /lib | /lib64 | /mnt | /opt | /proc | /root | /run | /sbin | /srv | /sys | /tmp | /usr | /var | /var/backups | /var/lib | /var/log)
+      fail "$description path points at a broad system directory that this installer must not manage: $path"
+      ;;
+  esac
+
+  if [[ "$path" == *'/../'* || "$path" == */.. || "$path" == *'/./'* || "$path" == */. ]]; then
+    fail "$description path must not contain . or .. path segments: $path"
+  fi
+}
+
+path_is_within() {
+  local child
+  local parent
+
+  child="$(normalize_managed_path "$1")"
+  parent="$(normalize_managed_path "$2")"
+
+  [[ "$child" == "$parent" || "$child" == "$parent"/* ]]
+}
+
 load_runtime_paths() {
   VPS_DESTINATION_DIR="$DEFAULT_DESTINATION_DIR"
   LOG_DIR="$DEFAULT_LOG_DIR"
   STATE_DIR="$DEFAULT_STATE_DIR"
   ARCHIVE_BASE_DIR="$DEFAULT_ARCHIVE_BASE_DIR"
+  ALLOW_NON_DAILYBACKUPS_DESTINATION="false"
 
   if [[ -f "$ENV_TARGET" ]]; then
     # shellcheck disable=SC1090
     source "$ENV_TARGET"
   fi
 
-  VPS_DESTINATION_DIR="${VPS_DESTINATION_DIR:-$DEFAULT_DESTINATION_DIR}"
-  LOG_DIR="${LOG_DIR:-$DEFAULT_LOG_DIR}"
-  STATE_DIR="${STATE_DIR:-$DEFAULT_STATE_DIR}"
-  ARCHIVE_BASE_DIR="${ARCHIVE_BASE_DIR:-$DEFAULT_ARCHIVE_BASE_DIR}"
+  VPS_DESTINATION_DIR="$(normalize_managed_path "${VPS_DESTINATION_DIR:-$DEFAULT_DESTINATION_DIR}")"
+  LOG_DIR="$(normalize_managed_path "${LOG_DIR:-$DEFAULT_LOG_DIR}")"
+  STATE_DIR="$(normalize_managed_path "${STATE_DIR:-$DEFAULT_STATE_DIR}")"
+  ARCHIVE_BASE_DIR="$(normalize_managed_path "${ARCHIVE_BASE_DIR:-$DEFAULT_ARCHIVE_BASE_DIR}")"
+  ALLOW_NON_DAILYBACKUPS_DESTINATION="${ALLOW_NON_DAILYBACKUPS_DESTINATION:-false}"
+}
+
+validate_runtime_paths() {
+  local destination_leaf
+  local managed_path
+
+  destination_leaf="${VPS_DESTINATION_DIR##*/}"
+  if [[ "$destination_leaf" != "dailybackups" ]] && ! is_true "$ALLOW_NON_DAILYBACKUPS_DESTINATION"; then
+    fail "Backup destination path must end in dailybackups. Current value: $VPS_DESTINATION_DIR"
+  fi
+
+  require_managed_path_safe "$VPS_DESTINATION_DIR" "Backup destination"
+  require_managed_path_safe "$LOG_DIR" "Log directory"
+  require_managed_path_safe "$STATE_DIR" "State directory"
+  require_managed_path_safe "$ARCHIVE_BASE_DIR" "Archive directory"
+
+  for managed_path in "$LOG_DIR" "$STATE_DIR" "$ARCHIVE_BASE_DIR"; do
+    if path_is_within "$managed_path" "$VPS_DESTINATION_DIR"; then
+      fail "Log, state, and archive directories must not be inside the backup destination because retention pruning manages destination files: $managed_path"
+    fi
+  done
+
+  if [[ "$LOG_DIR" == "$STATE_DIR" || "$LOG_DIR" == "$ARCHIVE_BASE_DIR" || "$STATE_DIR" == "$ARCHIVE_BASE_DIR" ]]; then
+    fail "Log, state, and archive directories must be separate directories."
+  fi
 }
 
 ensure_directory() {
@@ -194,8 +299,7 @@ ensure_directory() {
   local mode="$2"
   local description="$3"
 
-  [[ -n "$path" ]] || fail "$description path is empty."
-  [[ "$path" == /* ]] || fail "$description path must be absolute: $path"
+  require_managed_path_safe "$path" "$description"
 
   if [[ -e "$path" && ! -d "$path" ]]; then
     fail "$description path exists but is not a directory: $path"
@@ -266,5 +370,6 @@ ensure_rclone_metadata_support
 validate_required_commands
 install_project_files
 load_runtime_paths
+validate_runtime_paths
 ensure_runtime_directories
 print_next_steps

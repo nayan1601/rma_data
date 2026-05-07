@@ -46,11 +46,10 @@ Run these checks from the repository root after changing scripts, systemd units,
 ```bash
 bash -n scripts/*.sh tests/*.sh
 shellcheck scripts/*.sh tests/*.sh
-tests/run-backup-sync-tests.sh
 tests/test-sync-google-drive-sql-backups.sh
 ```
 
-The test suites use fake `rclone` binaries and temporary folders to verify financial-year selection, real-run pruning and archiving, dry-run safety, root-level source rejection, post-sync checks, summary writing, and the guard that prevents `ARCHIVE_BASE_DIR` from living inside `VPS_DESTINATION_DIR`.
+The test suite uses a fake `rclone` binary and temporary folders to verify financial-year selection, real-run pruning and archiving, dry-run safety, root-level source rejection, source-path validation, post-sync checks, summary writing, and the guards that keep runtime folders outside `VPS_DESTINATION_DIR`.
 
 ## Documentation Index
 
