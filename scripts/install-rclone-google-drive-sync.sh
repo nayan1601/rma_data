@@ -105,8 +105,8 @@ install_apt_packages() {
 }
 
 rclone_supports_metadata() {
-  command -v rclone >/dev/null 2>&1 &&
-    rclone lsjson --help 2>/dev/null | grep -q -- '--metadata'
+  command -v rclone >/dev/null 2>&1 || return 1
+  rclone lsjson --metadata --help >/dev/null 2>&1
 }
 
 install_or_upgrade_rclone_from_official_script() {

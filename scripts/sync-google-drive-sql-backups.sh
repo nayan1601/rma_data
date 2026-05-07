@@ -177,7 +177,7 @@ validate_bool() {
 }
 
 require_rclone_metadata_support() {
-  if ! "$RCLONE_BIN" lsjson --help 2>/dev/null | grep -q -- '--metadata'; then
+  if ! "$RCLONE_BIN" lsjson --metadata --help >/dev/null 2>&1; then
     fail "Installed rclone does not support 'lsjson --metadata'. Install a current rclone release before using financial-year metadata retention."
   fi
 }
