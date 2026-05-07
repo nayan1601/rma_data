@@ -26,7 +26,7 @@ Valid example:
 
 ```bash
 RCLONE_REMOTE_NAME="gdrive"
-GDRIVE_SOURCE_PATH="SQL Backups"
+GDRIVE_SOURCE_PATH="Computers/My Computer (1)/E:/Back/PPE"
 VPS_DESTINATION_DIR="/dailybackups"
 RETENTION_POLICY="latest_per_financial_year"
 BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR="7"
@@ -48,7 +48,7 @@ VPS_DESTINATION_DIR="/backups"
 | Input | Type | Example | Purpose |
 | --- | --- | --- | --- |
 | `RCLONE_REMOTE_NAME` | String | `gdrive` | Name of the rclone Google Drive remote. |
-| `GDRIVE_SOURCE_PATH` | String | `SQL Backups` | Google Drive folder containing financial-year backup folders. |
+| `GDRIVE_SOURCE_PATH` | String | `Computers/My Computer (1)/E:/Back/PPE` | Google Drive folder containing financial-year backup folders. |
 | `VPS_DESTINATION_DIR` | Absolute Linux path | `/dailybackups` | Local VPS folder receiving backup files. |
 
 ## Operational Inputs
@@ -102,8 +102,7 @@ the Google Drive source folder must use this structure:
 Example:
 
 ```text
-SQL Backups/FY2024-25/prod-2025-03-31.sql.gz
-SQL Backups/FY2025-26/prod-2026-05-06.sql.gz
+Computers/My Computer (1)/E:/Back/PPE/2026-27/Data-Wed.SQLBackup
 ```
 
 The script treats the first path segment under `GDRIVE_SOURCE_PATH` as the financial year.
@@ -112,10 +111,10 @@ Examples:
 
 | Remote file path relative to source | Financial year used by script |
 | --- | --- |
-| `FY2024-25/prod-2025-03-31.sql.gz` | `FY2024-25` |
-| `2025-26/mysql/prod-2026-05-06.sql.gz` | `2025-26` |
+| `2026-27/Data-Wed.SQLBackup` | `2026-27` |
+| `2026-27/nested/Data-Wed.SQLBackup` | `2026-27` |
 
-Files directly under the source folder, such as `SQL Backups/prod.sql.gz`, are rejected by default because they cannot be assigned to a financial-year folder.
+Files directly under the source folder, such as `Computers/My Computer (1)/E:/Back/PPE/Data-Wed.SQLBackup`, are rejected by default because they cannot be assigned to a financial-year folder.
 
 ## rclone Performance Inputs
 
@@ -167,7 +166,7 @@ The source path is built by the script as:
 Example:
 
 ```text
-gdrive:SQL Backups
+gdrive:Computers/My Computer (1)/E:/Back/PPE
 ```
 
 If `GDRIVE_SOURCE_PATH` starts or ends with `/`, the script strips those slashes before passing it to rclone. Repeated slashes are collapsed. If nothing remains, the script refuses to run. This keeps Drive paths consistent while preventing accidental Drive-root syncs.
@@ -364,14 +363,8 @@ Example:
 
 ```text
 /dailybackups/
-  FY2024-25/
-    prod-2025-03-29.sql.gz
-    prod-2025-03-30.sql.gz
-    prod-2025-03-31.sql.gz
-  FY2025-26/
-    prod-2026-05-04.sql.gz
-    prod-2026-05-05.sql.gz
-    prod-2026-05-06.sql.gz
+  2026-27/
+    Data-Wed.SQLBackup
 ```
 
 ## Log Output Format

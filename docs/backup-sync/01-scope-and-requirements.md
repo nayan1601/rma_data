@@ -97,16 +97,16 @@ The installer cannot automate Google Drive authorization. `sudo rclone config` m
 
 ## Required Google Drive Setup
 
-Before production sync, identify the exact Drive folder that contains SQL backups. Example:
+Before production sync, identify the exact Drive folder that contains the financial-year folders. For this deployment, the observed backup file is:
 
 ```text
-SQL Backups
+Computers/My Computer (1)/E:/Back/PPE/2026-27/Data-Wed.SQLBackup
 ```
 
-or:
+Therefore `GDRIVE_SOURCE_PATH` must be the parent folder that contains `2026-27`, not the backup file path itself:
 
 ```text
-Company Backups/Production SQL
+Computers/My Computer (1)/E:/Back/PPE
 ```
 
 The folder path becomes `GDRIVE_SOURCE_PATH` in `/etc/rclone-gdrive-sql-backup-sync.env`.
@@ -116,22 +116,20 @@ By default, that source folder must contain financial-year folders as immediate 
 Example:
 
 ```text
-SQL Backups/
-  FY2023-24/
-  FY2024-25/
-  FY2025-26/
+Computers/My Computer (1)/E:/Back/PPE/
+  2026-27/
+    Data-Wed.SQLBackup
 ```
 
 The same folders are created on the VPS:
 
 ```text
 /dailybackups/
-  FY2023-24/
-  FY2024-25/
-  FY2025-26/
+  2026-27/
+    Data-Wed.SQLBackup
 ```
 
-Root-level files directly inside `SQL Backups/` are rejected by default when financial-year retention is enabled.
+Root-level files directly inside `Computers/My Computer (1)/E:/Back/PPE/` are rejected by default when financial-year retention is enabled.
 
 ## Required rclone Remote
 
@@ -152,7 +150,7 @@ gdrive:<GDRIVE_SOURCE_PATH>
 Example:
 
 ```text
-gdrive:SQL Backups
+gdrive:Computers/My Computer (1)/E:/Back/PPE
 ```
 
 ## Destination Folder Requirement

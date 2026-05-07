@@ -116,10 +116,10 @@ Check the backup folder can be listed:
 
 ```bash
 sudo rclone lsd "gdrive:"
-sudo rclone ls "gdrive:SQL Backups" --max-depth 1
+sudo rclone ls "gdrive:Computers/My Computer (1)/E:/Back/PPE" --max-depth 2
 ```
 
-Replace `SQL Backups` with the real Google Drive folder path.
+The source path is the folder that contains the financial-year folders. Do not include the backup file name in `GDRIVE_SOURCE_PATH`.
 
 ## 4. Edit The Environment File
 
@@ -133,7 +133,7 @@ Set at minimum:
 
 ```bash
 RCLONE_REMOTE_NAME="gdrive"
-GDRIVE_SOURCE_PATH="SQL Backups"
+GDRIVE_SOURCE_PATH="Computers/My Computer (1)/E:/Back/PPE"
 VPS_DESTINATION_DIR="/dailybackups"
 RETENTION_POLICY="latest_per_financial_year"
 BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR="7"
@@ -163,15 +163,15 @@ findmnt -T /dailybackups
 Confirm the Google Drive folder has financial-year folders directly under it:
 
 ```text
-SQL Backups/FY2024-25/
-SQL Backups/FY2025-26/
+Computers/My Computer (1)/E:/Back/PPE/2026-27/
+Computers/My Computer (1)/E:/Back/PPE/2026-27/Data-Wed.SQLBackup
 ```
 
 The VPS will keep the same structure:
 
 ```text
-/dailybackups/FY2024-25/
-/dailybackups/FY2025-26/
+/dailybackups/2026-27/
+/dailybackups/2026-27/Data-Wed.SQLBackup
 ```
 
 ## 5. Optional: Enable SQL File Filtering

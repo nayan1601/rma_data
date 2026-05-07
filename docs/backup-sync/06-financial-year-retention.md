@@ -19,19 +19,9 @@ The configured Google Drive source folder must contain financial-year folders as
 Example:
 
 ```text
-SQL Backups/
-  FY2023-24/
-    prod-2024-03-29.sql.gz
-    prod-2024-03-30.sql.gz
-    prod-2024-03-31.sql.gz
-  FY2024-25/
-    prod-2025-03-29.sql.gz
-    prod-2025-03-30.sql.gz
-    prod-2025-03-31.sql.gz
-  FY2025-26/
-    prod-2026-05-04.sql.gz
-    prod-2026-05-05.sql.gz
-    prod-2026-05-06.sql.gz
+Computers/My Computer (1)/E:/Back/PPE/
+  2026-27/
+    Data-Wed.SQLBackup
 ```
 
 The script treats the first folder below `GDRIVE_SOURCE_PATH` as the financial year.
@@ -46,9 +36,8 @@ The VPS preserves the same folder names:
 
 ```text
 /dailybackups/
-  FY2023-24/
-  FY2024-25/
-  FY2025-26/
+  2026-27/
+    Data-Wed.SQLBackup
 ```
 
 Each financial-year folder should contain no more than:
@@ -124,7 +113,7 @@ If a local file is not in the selected remote file list:
 Archive example:
 
 ```text
-/var/backups/rclone-gdrive-sql-backup-sync/archive/20260506T023000Z/FY2024-25/prod-2025-03-01.sql.gz.20260506T023000Z
+/var/backups/rclone-gdrive-sql-backup-sync/archive/20260506T023000Z/2026-27/Data-Wed.SQLBackup.20260506T023000Z
 ```
 
 ## Configuration

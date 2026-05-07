@@ -340,6 +340,30 @@ run_drive_dot_segment_rejection_test() {
   printf 'ok - Google Drive source dot segments are rejected\n'
 }
 
+run_observed_drive_source_path_validation_test() {
+  local case_dir="${TEST_ROOT}/observed-drive-source"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${case_dir}/state"
+  local archive_dir="${case_dir}/archive"
+
+  mkdir -p "$case_dir" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir"
+  write_fake_rclone "$fake_rclone"
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+  sed -i 's|^GDRIVE_SOURCE_PATH=.*|GDRIVE_SOURCE_PATH="Computers/My Computer (1)/E:/Back/PPE"|' "$env_file"
+  sed -i 's|^RCLONE_BIN=.*|RCLONE_BIN="/missing/rclone"|' "$env_file"
+
+  if bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1; then
+    fail "Expected missing rclone command after accepting observed Google Drive source path"
+  fi
+
+  assert_contains "${case_dir}/run.out" "Required command '/missing/rclone' is not installed"
+  assert_contains "${state_dir}/last-run.env" '^STATUS=failed$'
+  printf 'ok - observed Google Drive source path syntax is accepted\n'
+}
+
 run_runtime_directory_inside_destination_rejection_test() {
   local case_dir="${TEST_ROOT}/unsafe-runtime-dir"
   local fake_rclone="${case_dir}/fake-rclone"
@@ -413,6 +437,7 @@ run_dry_run_safety_test
 run_root_level_rejection_test
 run_drive_root_path_rejection_test
 run_drive_dot_segment_rejection_test
+run_observed_drive_source_path_validation_test
 run_runtime_directory_inside_destination_rejection_test
 run_state_directory_inside_destination_no_summary_test
 run_unsafe_state_directory_rejection_test

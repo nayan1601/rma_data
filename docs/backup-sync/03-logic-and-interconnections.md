@@ -183,15 +183,13 @@ The script expects financial-year folders as top-level folders under `GDRIVE_SOU
 Example:
 
 ```text
-SQL Backups/FY2024-25/file-a.sql.gz
-SQL Backups/FY2025-26/file-b.sql.gz
+Computers/My Computer (1)/E:/Back/PPE/2026-27/Data-Wed.SQLBackup
 ```
 
 The script groups by the first path segment:
 
 ```text
-FY2024-25
-FY2025-26
+2026-27
 ```
 
 Inside each group, files are sorted by the configured metadata timestamp descending. The default `RETENTION_TIMESTAMP_MODE="latest_metadata_time"` uses the newest available value among Google Drive upload/create metadata, Google Drive update metadata, and rclone `ModTime`. The newest `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` files are copied to the VPS. Local files not in that selected set are archived or deleted depending on `ARCHIVE_DELETED_FILES`.

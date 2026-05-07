@@ -161,15 +161,17 @@ Check:
 
 ```bash
 rclone lsd "gdrive:"
-rclone lsd "gdrive:Parent Folder"
-rclone ls "gdrive:SQL Backups" --max-depth 1
+rclone lsd "gdrive:Computers/My Computer (1)/E:/Back"
+rclone ls "gdrive:Computers/My Computer (1)/E:/Back/PPE" --max-depth 2
 ```
 
 Then update:
 
 ```bash
-GDRIVE_SOURCE_PATH="correct/folder/path"
+GDRIVE_SOURCE_PATH="Computers/My Computer (1)/E:/Back/PPE"
 ```
+
+Do not set `GDRIVE_SOURCE_PATH` to `Computers/My Computer (1)/E:/Back/PPE/2026-27/Data-Wed.SQLBackup`; that is the backup file path. The source must be the parent folder that contains `2026-27`.
 
 ## Troubleshooting: root-level files rejected
 
@@ -187,7 +189,7 @@ The source contains files directly under `GDRIVE_SOURCE_PATH` instead of inside 
 Fix the Google Drive layout:
 
 ```text
-SQL Backups/FY2025-26/prod-2026-05-06.sql.gz
+Computers/My Computer (1)/E:/Back/PPE/2026-27/Data-Wed.SQLBackup
 ```
 
 If root-level files are intentional, set:
