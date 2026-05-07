@@ -228,6 +228,44 @@ run_retention_prune_test() {
   printf 'ok - retention copy selects latest 5, prunes, archives, and writes summary\n'
 }
 
+run_dry_run_safety_test() {
+  local case_dir="${TEST_ROOT}/dry-run"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local remote_root="${case_dir}/remote"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${case_dir}/state"
+  local archive_dir="${case_dir}/archive"
+  local json_path="${case_dir}/remote.json"
+
+  mkdir -p "$case_dir" "$dest_dir/FY2025-26" "$log_dir" "$state_dir" "$archive_dir"
+  write_fake_rclone "$fake_rclone"
+  write_retention_json "$json_path"
+
+  local file
+  for file in a b c d e f g h; do
+    create_remote_file "$remote_root" "FY2025-26/${file}.sql.gz"
+  done
+  printf 'existing local a\n' >"${dest_dir}/FY2025-26/a.sql.gz"
+  printf 'stale local b\n' >"${dest_dir}/FY2025-26/b.sql.gz"
+
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+  sed -i 's/^DRY_RUN="false"/DRY_RUN="true"/' "$env_file"
+
+  FAKE_RCLONE_JSON="$json_path" FAKE_RCLONE_REMOTE_ROOT="$remote_root" \
+    bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1
+
+  assert_file_exists "${dest_dir}/FY2025-26/a.sql.gz"
+  assert_file_exists "${dest_dir}/FY2025-26/b.sql.gz"
+  assert_file_missing "${dest_dir}/FY2025-26/d.sql.gz"
+  assert_file_missing "${archive_dir}"/*/FY2025-26/a.sql.gz.*
+  assert_contains "${state_dir}/last-run.env" '^STATUS=success$'
+  assert_contains "${state_dir}/last-run.env" '^LOCAL_PRUNED_FILES=0$'
+  assert_contains "${case_dir}/run.out" 'DRY RUN: would prune local file: FY2025-26/a\.sql\.gz'
+  printf 'ok - dry run leaves local files and archives unchanged\n'
+}
+
 run_root_level_rejection_test() {
   local case_dir="${TEST_ROOT}/root-level"
   local fake_rclone="${case_dir}/fake-rclone"
@@ -258,5 +296,6 @@ run_root_level_rejection_test() {
 
 bash -n "$SYNC_SCRIPT"
 run_retention_prune_test
+run_dry_run_safety_test
 run_root_level_rejection_test
 printf 'All sync robustness tests passed.\n'

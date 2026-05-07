@@ -12,7 +12,7 @@
 | State folder | `/var/lib/rclone-gdrive-sql-backup-sync` | Stores lock file and last-run summary. |
 | Archive folder | `/var/backups/rclone-gdrive-sql-backup-sync/archive` | Stores destination files deleted or overwritten by sync. |
 | systemd service | `/etc/systemd/system/rclone-gdrive-sql-backup-sync.service` | Runs one sync job. |
-| systemd timer | `/etc/systemd/system/rclone-gdrive-sql-backup-sync.timer` | Starts the service daily. |
+| systemd timer | `/etc/systemd/system/rclone-gdrive-sql-backup-sync.timer` | Starts the service every 30 minutes. |
 
 ## Data Flow
 
@@ -251,16 +251,19 @@ rclone-gdrive-sql-backup-sync.timer
 The timer uses:
 
 ```text
-OnCalendar=*-*-* 02:30:00
+OnCalendar=*:0/30
+OnBootSec=5m
 Persistent=true
-RandomizedDelaySec=15m
+RandomizedDelaySec=0
+AccuracySec=1s
 ```
 
 Meaning:
 
-- Run daily at 02:30 VPS local time.
-- If the VPS was down at the scheduled time, run after it comes back.
-- Add up to 15 minutes of random delay to avoid all servers hitting external services at exactly the same second.
+- Run at minute 00 and 30 every hour in VPS local time.
+- Run once five minutes after boot.
+- If the VPS was down for scheduled runs, catch up after it comes back.
+- Do not add random delay because the requirement is a 30-minute fetch window.
 
 ## Failure Boundaries
 

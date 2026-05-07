@@ -173,7 +173,7 @@ printf 'stale\n' >"${real_dest}/FY2024-25/local-stale.sql.gz"
 printf 'old\n' >"${real_dest}/FY2025-26/backup-a.sql.gz"
 write_env "$real_env" "$real_dest" "$real_state" "$real_log" "$real_archive" "false"
 
-bash "$SCRIPT_UNDER_TEST" "$real_env" >/"${real_root}/run.out"
+bash "$SCRIPT_UNDER_TEST" "$real_env" >"${real_root}/run.out"
 
 assert_file_exists "${real_dest}/FY2024-25/backup-newest.sql.gz"
 assert_file_exists "${real_dest}/FY2025-26/backup-f.sql.gz"
@@ -195,7 +195,7 @@ mkdir -p "${dry_dest}/FY2024-25" "$dry_state" "$dry_log" "$dry_archive"
 printf 'stale\n' >"${dry_dest}/FY2024-25/local-stale.sql.gz"
 write_env "$dry_env" "$dry_dest" "$dry_state" "$dry_log" "$dry_archive" "true"
 
-bash "$SCRIPT_UNDER_TEST" "$dry_env" >/"${dry_root}/run.out"
+bash "$SCRIPT_UNDER_TEST" "$dry_env" >"${dry_root}/run.out"
 
 assert_file_exists "${dry_dest}/FY2024-25/local-stale.sql.gz"
 assert_file_missing "${dry_dest}/FY2024-25/backup-newest.sql.gz"
@@ -212,7 +212,7 @@ unsafe_log="${unsafe_root}/log"
 unsafe_env="${unsafe_root}/env"
 mkdir -p "$unsafe_dest" "$unsafe_state" "$unsafe_log"
 write_env "$unsafe_env" "$unsafe_dest" "$unsafe_state" "$unsafe_log" "${unsafe_dest}/archive" "true"
-if bash "$SCRIPT_UNDER_TEST" "$unsafe_env" >/"${unsafe_root}/run.out" 2>&1; then
+if bash "$SCRIPT_UNDER_TEST" "$unsafe_env" >"${unsafe_root}/run.out" 2>&1; then
   fail "Expected archive-inside-destination configuration to fail."
 fi
 grep -q 'ARCHIVE_BASE_DIR must not be the destination folder or inside it' "${unsafe_root}/run.out" || fail "Expected archive safety error."

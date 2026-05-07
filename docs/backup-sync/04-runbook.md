@@ -15,6 +15,19 @@ findmnt
 
 If `/dailybackups` should use a dedicated disk, partition, LVM volume, or mounted storage path, mount that storage before running the sync in production.
 
+## Repository Validation Before VPS Installation
+
+When changing this repository, run the local validation suite before installing or updating a production VPS:
+
+```bash
+bash -n scripts/*.sh tests/*.sh
+shellcheck scripts/*.sh tests/*.sh
+tests/run-backup-sync-tests.sh
+tests/test-sync-google-drive-sql-backups.sh
+```
+
+The offline test harnesses create temporary fake `rclone` commands and controlled remote metadata. They check latest-per-financial-year selection, dry-run non-mutation, archive/prune behavior, unsafe archive placement, root-level source rejection, post-sync verification, and last-run summary fields without needing Google Drive credentials.
+
 ## 1. Copy The Project To The VPS
 
 Use whichever deployment method is standard for the VPS.
@@ -278,7 +291,7 @@ Then run the sync manually again.
 
 After the first production validation, decide whether to keep this enabled. It increases confidence but can increase runtime and Google API usage.
 
-## 9. Enable Daily Scheduling
+## 9. Enable 30-Minute Automatic Fetch
 
 Run:
 
@@ -294,13 +307,13 @@ Confirm timer:
 systemctl list-timers --all rclone-gdrive-sql-backup-sync.timer
 ```
 
-The default timer runs daily at:
+The default timer checks Google Drive twice per hour:
 
 ```text
-02:30 VPS local time
+minute 00 and minute 30
 ```
 
-with up to 15 minutes randomized delay.
+with `AccuracySec=1s` and no randomized delay.
 
 ## 10. Run The systemd Service Manually
 
@@ -332,10 +345,16 @@ Edit:
 sudo nano /etc/systemd/system/rclone-gdrive-sql-backup-sync.timer
 ```
 
-Example for daily 04:15:
+Default 30-minute schedule:
 
 ```ini
-OnCalendar=*-*-* 04:15:00
+OnCalendar=*:0/30
+```
+
+Example for every 15 minutes:
+
+```ini
+OnCalendar=*:0/15
 ```
 
 Reload:
@@ -354,21 +373,23 @@ sudo systemctl disable --now rclone-gdrive-sql-backup-sync.timer
 
 Manual runs still work.
 
-## 13. Check Daily Health
+## 13. Check Automatic Fetch Health
 
-Daily operator checklist:
+Operator checklist:
 
 ```bash
 sudo cat /var/lib/rclone-gdrive-sql-backup-sync/last-run.env
 sudo du -sh /dailybackups
 sudo find /dailybackups -type f -mtime -2 | head -20
-sudo journalctl -u rclone-gdrive-sql-backup-sync.service --since "24 hours ago" --no-pager
+systemctl list-timers --all rclone-gdrive-sql-backup-sync.timer
+sudo journalctl -u rclone-gdrive-sql-backup-sync.service --since "2 hours ago" --no-pager
 ```
 
 Expected:
 
 - `STATUS=success`
 - `EXIT_CODE=0`
+- Next timer run is within 30 minutes.
 - Recent backup files exist.
 - Disk usage is within expected range.
 - No repeated rclone errors.
