@@ -17,7 +17,7 @@ The module is designed for operational use. It includes:
 - Shell scripts with defensive validation and comments.
 - Example environment configuration.
 - Optional SQL backup file filtering.
-- systemd service and timer files for daily scheduling.
+- systemd service and timer files for 30-minute automatic fetching.
 - Logs and machine-readable run summaries.
 - Safety controls for dry runs, free-space checks, and deleted-file archival.
 - Financial-year based VPS retention to keep only the latest 5-7 backups per financial year.
@@ -30,13 +30,14 @@ The module is designed for operational use. It includes:
 - Preservation of top-level Google Drive financial-year folders under `dailybackups`.
 - Local VPS retention of only the latest configured backup files per financial-year folder.
 - Manual execution for first validation.
-- Daily scheduled execution through systemd.
+- Automatic scheduled execution through systemd every 30 minutes.
 - rclone remote configuration documentation.
 - Runtime logs in `/var/log/rclone-gdrive-sql-backup-sync`.
 - State summary in `/var/lib/rclone-gdrive-sql-backup-sync/last-run.env`.
 - Optional post-sync verification with `rclone check --one-way`.
 - Optional include filter for common SQL backup file extensions.
 - Automated installation and repair of required Ubuntu packages, runtime folders, and file permissions.
+- Near-realtime polling with a 30-minute maximum check interval in normal operation.
 
 ## Out Of Scope
 
@@ -66,7 +67,7 @@ The production VPS environment is:
 
 - Ubuntu 24.04 Server.
 - Bare-metal hosting.
-- systemd.
+- systemd timer support.
 - Root or sudo access.
 - Bash.
 - jq for structured JSON selection of latest backup files per financial-year folder.
@@ -96,16 +97,16 @@ The installer cannot automate Google Drive authorization. `sudo rclone config` m
 
 ## Required Google Drive Setup
 
-Before production sync, identify the exact Drive folder that contains SQL backups. Example:
+Before production sync, identify the exact Drive folder that contains the financial-year folders. For this deployment, the observed backup file is:
 
 ```text
-SQL Backups
+Computers/My Computer (1)/E:/Back/PPE/2026-27/Data-Wed.SQLBackup
 ```
 
-or:
+Therefore `GDRIVE_SOURCE_PATH` must be the parent folder that contains `2026-27`, not the backup file path itself:
 
 ```text
-Company Backups/Production SQL
+Computers/My Computer (1)/E:/Back/PPE
 ```
 
 The folder path becomes `GDRIVE_SOURCE_PATH` in `/etc/rclone-gdrive-sql-backup-sync.env`.
@@ -115,22 +116,20 @@ By default, that source folder must contain financial-year folders as immediate 
 Example:
 
 ```text
-SQL Backups/
-  FY2023-24/
-  FY2024-25/
-  FY2025-26/
+Computers/My Computer (1)/E:/Back/PPE/
+  2026-27/
+    Data-Wed.SQLBackup
 ```
 
 The same folders are created on the VPS:
 
 ```text
 /dailybackups/
-  FY2023-24/
-  FY2024-25/
-  FY2025-26/
+  2026-27/
+    Data-Wed.SQLBackup
 ```
 
-Root-level files directly inside `SQL Backups/` are rejected by default when financial-year retention is enabled.
+Root-level files directly inside `Computers/My Computer (1)/E:/Back/PPE/` are rejected by default when financial-year retention is enabled.
 
 ## Required rclone Remote
 
@@ -151,7 +150,7 @@ gdrive:<GDRIVE_SOURCE_PATH>
 Example:
 
 ```text
-gdrive:SQL Backups
+gdrive:Computers/My Computer (1)/E:/Back/PPE
 ```
 
 ## Destination Folder Requirement
@@ -211,4 +210,5 @@ The module is considered working when:
 4. `/var/lib/rclone-gdrive-sql-backup-sync/last-run.env` shows `STATUS=success`.
 5. Each financial-year folder on the VPS keeps no more than `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` selected backup files.
 6. The systemd timer is enabled and listed by `systemctl list-timers`.
-7. Logs exist under `/var/log/rclone-gdrive-sql-backup-sync`.
+7. The next timer run is scheduled within 30 minutes.
+8. Logs exist under `/var/log/rclone-gdrive-sql-backup-sync`.

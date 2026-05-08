@@ -26,7 +26,7 @@ Valid example:
 
 ```bash
 RCLONE_REMOTE_NAME="gdrive"
-GDRIVE_SOURCE_PATH="SQL Backups"
+GDRIVE_SOURCE_PATH="Computers/My Computer (1)/E:/Back/PPE"
 VPS_DESTINATION_DIR="/dailybackups"
 RETENTION_POLICY="latest_per_financial_year"
 BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR="7"
@@ -48,7 +48,7 @@ VPS_DESTINATION_DIR="/backups"
 | Input | Type | Example | Purpose |
 | --- | --- | --- | --- |
 | `RCLONE_REMOTE_NAME` | String | `gdrive` | Name of the rclone Google Drive remote. |
-| `GDRIVE_SOURCE_PATH` | String | `SQL Backups` | Google Drive folder containing financial-year backup folders. |
+| `GDRIVE_SOURCE_PATH` | String | `Computers/My Computer (1)/E:/Back/PPE` | Google Drive folder containing financial-year backup folders. |
 | `VPS_DESTINATION_DIR` | Absolute Linux path | `/dailybackups` | Local VPS folder receiving backup files. |
 
 ## Operational Inputs
@@ -76,7 +76,9 @@ Validation includes:
 - Boolean values must be true/false style values.
 - Count and retention values must be integers.
 - `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` must be between 5 and 7.
-- `VPS_DESTINATION_DIR`, `LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR` must be absolute paths.
+- `GDRIVE_SOURCE_PATH` must identify a specific Drive folder and must not contain `.` or `..` path segments.
+- `VPS_DESTINATION_DIR`, `LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR` must be absolute managed paths and must not point at broad system directories.
+- `LOG_DIR`, `STATE_DIR`, and `ARCHIVE_BASE_DIR` must be separate directories outside `VPS_DESTINATION_DIR`; otherwise retention pruning could process runtime files as backup files.
 - `RCLONE_FILTER_FILE` must be an absolute path when set.
 - `RCLONE_CONFIG` must be an absolute existing file when set.
 - `FILE_UMASK` must be a valid octal umask.
@@ -100,8 +102,7 @@ the Google Drive source folder must use this structure:
 Example:
 
 ```text
-SQL Backups/FY2024-25/prod-2025-03-31.sql.gz
-SQL Backups/FY2025-26/prod-2026-05-06.sql.gz
+Computers/My Computer (1)/E:/Back/PPE/2026-27/Data-Wed.SQLBackup
 ```
 
 The script treats the first path segment under `GDRIVE_SOURCE_PATH` as the financial year.
@@ -110,10 +111,10 @@ Examples:
 
 | Remote file path relative to source | Financial year used by script |
 | --- | --- |
-| `FY2024-25/prod-2025-03-31.sql.gz` | `FY2024-25` |
-| `2025-26/mysql/prod-2026-05-06.sql.gz` | `2025-26` |
+| `2026-27/Data-Wed.SQLBackup` | `2026-27` |
+| `2026-27/nested/Data-Wed.SQLBackup` | `2026-27` |
 
-Files directly under the source folder, such as `SQL Backups/prod.sql.gz`, are rejected by default because they cannot be assigned to a financial-year folder.
+Files directly under the source folder, such as `Computers/My Computer (1)/E:/Back/PPE/Data-Wed.SQLBackup`, are rejected by default because they cannot be assigned to a financial-year folder.
 
 ## rclone Performance Inputs
 
@@ -165,10 +166,10 @@ The source path is built by the script as:
 Example:
 
 ```text
-gdrive:SQL Backups
+gdrive:Computers/My Computer (1)/E:/Back/PPE
 ```
 
-If `GDRIVE_SOURCE_PATH` starts or ends with `/`, the script strips those slashes before passing it to rclone. If nothing remains, the script refuses to run. This keeps Drive paths consistent while preventing accidental Drive-root syncs.
+If `GDRIVE_SOURCE_PATH` starts or ends with `/`, the script strips those slashes before passing it to rclone. Repeated slashes are collapsed. If nothing remains, the script refuses to run. This keeps Drive paths consistent while preventing accidental Drive-root syncs.
 
 The script refuses these source paths:
 
@@ -178,7 +179,7 @@ The script refuses these source paths:
 "."
 ```
 
-Reason: syncing the Google Drive root is too broad and risky. Parent-directory traversal such as `../Backups` is also rejected.
+Reason: syncing the Google Drive root is too broad and risky. Dot segments and parent-directory traversal such as `./Backups` or `../Backups` are also rejected.
 
 ## Destination Path Format
 
@@ -362,14 +363,8 @@ Example:
 
 ```text
 /dailybackups/
-  FY2024-25/
-    prod-2025-03-29.sql.gz
-    prod-2025-03-30.sql.gz
-    prod-2025-03-31.sql.gz
-  FY2025-26/
-    prod-2026-05-04.sql.gz
-    prod-2026-05-05.sql.gz
-    prod-2026-05-06.sql.gz
+  2026-27/
+    Data-Wed.SQLBackup
 ```
 
 ## Log Output Format
@@ -467,7 +462,7 @@ When `RETENTION_POLICY="none"` and `SYNC_MODE="sync"`, the script adds:
 --suffix ".$RUN_ID"
 ```
 
-This means destination files that would be deleted or replaced are moved into a run-specific archive folder instead of being permanently removed.
+This means destination files that would be deleted or replaced are moved into a run-specific archive folder instead of being permanently removed. The archive base must remain outside `VPS_DESTINATION_DIR`, and dry runs do not create per-run archive folders.
 
 Example:
 

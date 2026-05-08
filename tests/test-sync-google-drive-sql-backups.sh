@@ -228,6 +228,44 @@ run_retention_prune_test() {
   printf 'ok - retention copy selects latest 5, prunes, archives, and writes summary\n'
 }
 
+run_dry_run_safety_test() {
+  local case_dir="${TEST_ROOT}/dry-run"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local remote_root="${case_dir}/remote"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${case_dir}/state"
+  local archive_dir="${case_dir}/archive"
+  local json_path="${case_dir}/remote.json"
+
+  mkdir -p "$case_dir" "$dest_dir/FY2025-26" "$log_dir" "$state_dir" "$archive_dir"
+  write_fake_rclone "$fake_rclone"
+  write_retention_json "$json_path"
+
+  local file
+  for file in a b c d e f g h; do
+    create_remote_file "$remote_root" "FY2025-26/${file}.sql.gz"
+  done
+  printf 'existing local a\n' >"${dest_dir}/FY2025-26/a.sql.gz"
+  printf 'stale local b\n' >"${dest_dir}/FY2025-26/b.sql.gz"
+
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+  sed -i 's/^DRY_RUN="false"/DRY_RUN="true"/' "$env_file"
+
+  FAKE_RCLONE_JSON="$json_path" FAKE_RCLONE_REMOTE_ROOT="$remote_root" \
+    bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1
+
+  assert_file_exists "${dest_dir}/FY2025-26/a.sql.gz"
+  assert_file_exists "${dest_dir}/FY2025-26/b.sql.gz"
+  assert_file_missing "${dest_dir}/FY2025-26/d.sql.gz"
+  assert_file_missing "${archive_dir}"/*/FY2025-26/a.sql.gz.*
+  assert_contains "${state_dir}/last-run.env" '^STATUS=success$'
+  assert_contains "${state_dir}/last-run.env" '^LOCAL_PRUNED_FILES=0$'
+  assert_contains "${case_dir}/run.out" 'DRY RUN: would prune local file: FY2025-26/a\.sql\.gz'
+  printf 'ok - dry run leaves local files and archives unchanged\n'
+}
+
 run_root_level_rejection_test() {
   local case_dir="${TEST_ROOT}/root-level"
   local fake_rclone="${case_dir}/fake-rclone"
@@ -256,7 +294,6 @@ run_root_level_rejection_test() {
   printf 'ok - root-level backup files are rejected by default\n'
 }
 
-
 run_drive_root_path_rejection_test() {
   local case_dir="${TEST_ROOT}/drive-root"
   local fake_rclone="${case_dir}/fake-rclone"
@@ -278,6 +315,53 @@ run_drive_root_path_rejection_test() {
   assert_contains "${case_dir}/run.out" 'GDRIVE_SOURCE_PATH must point to a specific Google Drive backup folder\.'
   assert_contains "${state_dir}/last-run.env" '^STATUS=failed$'
   printf 'ok - all-slashes Google Drive source paths are rejected\n'
+}
+
+run_drive_dot_segment_rejection_test() {
+  local case_dir="${TEST_ROOT}/drive-dot-segment"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${case_dir}/state"
+  local archive_dir="${case_dir}/archive"
+
+  mkdir -p "$case_dir" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir"
+  write_fake_rclone "$fake_rclone"
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+  sed -i 's|^GDRIVE_SOURCE_PATH=.*|GDRIVE_SOURCE_PATH="./SQL Backups"|' "$env_file"
+
+  if bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1; then
+    fail "Expected Google Drive source path dot-segment validation to fail"
+  fi
+
+  assert_contains "${case_dir}/run.out" 'dot segments'
+  assert_contains "${state_dir}/last-run.env" '^STATUS=failed$'
+  printf 'ok - Google Drive source dot segments are rejected\n'
+}
+
+run_observed_drive_source_path_validation_test() {
+  local case_dir="${TEST_ROOT}/observed-drive-source"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${case_dir}/state"
+  local archive_dir="${case_dir}/archive"
+
+  mkdir -p "$case_dir" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir"
+  write_fake_rclone "$fake_rclone"
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+  sed -i 's|^GDRIVE_SOURCE_PATH=.*|GDRIVE_SOURCE_PATH="Computers/My Computer (1)/E:/Back/PPE"|' "$env_file"
+  sed -i 's|^RCLONE_BIN=.*|RCLONE_BIN="/missing/rclone"|' "$env_file"
+
+  if bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1; then
+    fail "Expected missing rclone command after accepting observed Google Drive source path"
+  fi
+
+  assert_contains "${case_dir}/run.out" "Required command '/missing/rclone' is not installed"
+  assert_contains "${state_dir}/last-run.env" '^STATUS=failed$'
+  printf 'ok - observed Google Drive source path syntax is accepted\n'
 }
 
 run_runtime_directory_inside_destination_rejection_test() {
@@ -302,6 +386,27 @@ run_runtime_directory_inside_destination_rejection_test() {
   printf 'ok - runtime directories inside the managed destination are rejected\n'
 }
 
+run_state_directory_inside_destination_no_summary_test() {
+  local case_dir="${TEST_ROOT}/unsafe-state-inside-destination"
+  local fake_rclone="${case_dir}/fake-rclone"
+  local env_file="${case_dir}/sync.env"
+  local dest_dir="${case_dir}/dailybackups"
+  local log_dir="${case_dir}/logs"
+  local state_dir="${dest_dir}/state"
+  local archive_dir="${case_dir}/archive"
+
+  mkdir -p "$case_dir" "$dest_dir" "$log_dir" "$archive_dir"
+  write_fake_rclone "$fake_rclone"
+  write_env_file "$env_file" "$dest_dir" "$log_dir" "$state_dir" "$archive_dir" "$fake_rclone"
+
+  if bash "$SYNC_SCRIPT" "$env_file" >"${case_dir}/run.out" 2>&1; then
+    fail "Expected state directory inside destination validation to fail"
+  fi
+
+  assert_contains "${case_dir}/run.out" 'must not be inside VPS_DESTINATION_DIR'
+  assert_file_missing "$state_dir"
+  printf 'ok - unsafe state directories inside the destination do not receive summaries\n'
+}
 
 run_unsafe_state_directory_rejection_test() {
   local case_dir="${TEST_ROOT}/unsafe-state-dir"
@@ -328,8 +433,12 @@ run_unsafe_state_directory_rejection_test() {
 
 bash -n "$SYNC_SCRIPT"
 run_retention_prune_test
+run_dry_run_safety_test
 run_root_level_rejection_test
 run_drive_root_path_rejection_test
+run_drive_dot_segment_rejection_test
+run_observed_drive_source_path_validation_test
 run_runtime_directory_inside_destination_rejection_test
+run_state_directory_inside_destination_no_summary_test
 run_unsafe_state_directory_rejection_test
 printf 'All sync robustness tests passed.\n'

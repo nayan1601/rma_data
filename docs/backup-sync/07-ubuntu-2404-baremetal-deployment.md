@@ -125,6 +125,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now rclone-gdrive-sql-backup-sync.timer
 ```
 
+The timer checks Google Drive at minute 00 and minute 30 every hour:
+
+```ini
+OnCalendar=*:0/30
+```
+
 Inspect:
 
 ```bash
@@ -135,10 +141,11 @@ sudo journalctl -u rclone-gdrive-sql-backup-sync.service -n 100 --no-pager
 
 ## Bare-Metal Health Checks
 
-Daily or after first production deployment:
+After first production deployment and during operations:
 
 ```bash
 sudo cat /var/lib/rclone-gdrive-sql-backup-sync/last-run.env
+systemctl list-timers --all rclone-gdrive-sql-backup-sync.timer
 df -h
 findmnt -T /dailybackups
 sudo du -sh /dailybackups
@@ -150,5 +157,6 @@ Expected:
 - `STATUS=success`
 - `EXIT_CODE=0`
 - `FILES_WITHOUT_RETENTION_TIMESTAMP=0`
+- next timer run is within 30 minutes
 - `/dailybackups` file count per financial year is within configured retention
 - root filesystem has healthy free space

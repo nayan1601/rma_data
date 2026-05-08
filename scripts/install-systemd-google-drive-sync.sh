@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Install and enable the systemd timer for daily Google Drive SQL backup sync.
+# Install and enable the systemd timer for 30-minute Google Drive SQL backup checks.
 #
 # This script is idempotent. It installs the base sync module first if needed,
 # validates systemd availability, verifies unit syntax when possible, then

@@ -12,7 +12,7 @@
 | State folder | `/var/lib/rclone-gdrive-sql-backup-sync` | Stores lock file and last-run summary. |
 | Archive folder | `/var/backups/rclone-gdrive-sql-backup-sync/archive` | Stores destination files deleted, overwritten, or pruned by retention. |
 | systemd service | `/etc/systemd/system/rclone-gdrive-sql-backup-sync.service` | Runs one sync job. |
-| systemd timer | `/etc/systemd/system/rclone-gdrive-sql-backup-sync.timer` | Starts the service daily. |
+| systemd timer | `/etc/systemd/system/rclone-gdrive-sql-backup-sync.timer` | Starts the service every 30 minutes. |
 
 ## Data Flow
 
@@ -68,10 +68,6 @@ load ENV_FILE
 
 set defaults for optional values
 
-normalize GDRIVE_SOURCE_PATH by stripping leading/trailing slashes
-if normalized source path is empty, root, or uses parent-directory traversal:
-    fail
-
 normalize destination, log, state, and archive paths
 if basename(VPS_DESTINATION_DIR) != "dailybackups":
     fail unless explicitly allowed
@@ -79,7 +75,16 @@ if basename(VPS_DESTINATION_DIR) != "dailybackups":
 if destination, log, state, or archive path is a broad system directory:
     fail
 
-if log, state, or archive path is inside VPS_DESTINATION_DIR:
+if STATE_DIR is inside VPS_DESTINATION_DIR or points to LOG_DIR/ARCHIVE_BASE_DIR:
+    fail
+
+mark STATE_DIR safe for failure summaries
+
+if log or archive path is inside VPS_DESTINATION_DIR or both point to the same directory:
+    fail
+
+normalize GDRIVE_SOURCE_PATH by stripping leading/trailing slashes and collapsing repeated slashes
+if normalized source path is empty, root, or uses dot/parent-directory segments:
     fail
 
 create destination, log, state, and archive directories
@@ -178,15 +183,13 @@ The script expects financial-year folders as top-level folders under `GDRIVE_SOU
 Example:
 
 ```text
-SQL Backups/FY2024-25/file-a.sql.gz
-SQL Backups/FY2025-26/file-b.sql.gz
+Computers/My Computer (1)/E:/Back/PPE/2026-27/Data-Wed.SQLBackup
 ```
 
 The script groups by the first path segment:
 
 ```text
-FY2024-25
-FY2025-26
+2026-27
 ```
 
 Inside each group, files are sorted by the configured metadata timestamp descending. The default `RETENTION_TIMESTAMP_MODE="latest_metadata_time"` uses the newest available value among Google Drive upload/create metadata, Google Drive update metadata, and rclone `ModTime`. The newest `BACKUPS_TO_KEEP_PER_FINANCIAL_YEAR` files are copied to the VPS. Local files not in that selected set are archived or deleted depending on `ARCHIVE_DELETED_FILES`.
@@ -262,16 +265,19 @@ rclone-gdrive-sql-backup-sync.timer
 The timer uses:
 
 ```text
-OnCalendar=*-*-* 02:30:00
+OnCalendar=*:0/30
+OnBootSec=5m
 Persistent=true
-RandomizedDelaySec=15m
+RandomizedDelaySec=0
+AccuracySec=1s
 ```
 
 Meaning:
 
-- Run daily at 02:30 VPS local time.
-- If the VPS was down at the scheduled time, run after it comes back.
-- Add up to 15 minutes of random delay to avoid all servers hitting external services at exactly the same second.
+- Run at minute 00 and 30 every hour in VPS local time.
+- Run once five minutes after boot.
+- If the VPS was down for scheduled runs, catch up after it comes back.
+- Do not add random delay because the requirement is a 30-minute fetch window.
 
 ## Failure Boundaries
 

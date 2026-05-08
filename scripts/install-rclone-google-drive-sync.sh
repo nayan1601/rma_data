@@ -105,8 +105,8 @@ install_apt_packages() {
 }
 
 rclone_supports_metadata() {
-  command -v rclone >/dev/null 2>&1 &&
-    rclone lsjson --help 2>/dev/null | grep -q -- '--metadata'
+  command -v rclone >/dev/null 2>&1 || return 1
+  rclone lsjson --metadata --help >/dev/null 2>&1
 }
 
 install_or_upgrade_rclone_from_official_script() {
@@ -183,6 +183,36 @@ strip_trailing_slashes() {
   printf '%s' "$value"
 }
 
+collapse_repeated_slashes() {
+  local value="$1"
+  local result=""
+  local char
+  local previous_was_slash="false"
+  local i
+
+  for ((i = 0; i < ${#value}; i++)); do
+    char="${value:i:1}"
+    if [[ "$char" == "/" ]]; then
+      if [[ "$previous_was_slash" != "true" ]]; then
+        result+="/"
+        previous_was_slash="true"
+      fi
+    else
+      result+="$char"
+      previous_was_slash="false"
+    fi
+  done
+
+  printf '%s' "$result"
+}
+
+normalize_managed_path() {
+  local value="$1"
+
+  value="$(collapse_repeated_slashes "$value")"
+  strip_trailing_slashes "$value"
+}
+
 is_true() {
   case "${1:-}" in
     true | TRUE | True | 1 | yes | YES | y | Y) return 0 ;;
@@ -194,7 +224,7 @@ require_managed_path_safe() {
   local path
   local description="$2"
 
-  path="$(strip_trailing_slashes "$1")"
+  path="$(normalize_managed_path "$1")"
 
   [[ -n "$path" ]] || fail "$description path is empty."
   [[ "$path" == /* ]] || fail "$description path must be absolute: $path"
@@ -214,8 +244,8 @@ path_is_within() {
   local child
   local parent
 
-  child="$(strip_trailing_slashes "$1")"
-  parent="$(strip_trailing_slashes "$2")"
+  child="$(normalize_managed_path "$1")"
+  parent="$(normalize_managed_path "$2")"
 
   [[ "$child" == "$parent" || "$child" == "$parent"/* ]]
 }
@@ -232,10 +262,10 @@ load_runtime_paths() {
     source "$ENV_TARGET"
   fi
 
-  VPS_DESTINATION_DIR="$(strip_trailing_slashes "${VPS_DESTINATION_DIR:-$DEFAULT_DESTINATION_DIR}")"
-  LOG_DIR="$(strip_trailing_slashes "${LOG_DIR:-$DEFAULT_LOG_DIR}")"
-  STATE_DIR="$(strip_trailing_slashes "${STATE_DIR:-$DEFAULT_STATE_DIR}")"
-  ARCHIVE_BASE_DIR="$(strip_trailing_slashes "${ARCHIVE_BASE_DIR:-$DEFAULT_ARCHIVE_BASE_DIR}")"
+  VPS_DESTINATION_DIR="$(normalize_managed_path "${VPS_DESTINATION_DIR:-$DEFAULT_DESTINATION_DIR}")"
+  LOG_DIR="$(normalize_managed_path "${LOG_DIR:-$DEFAULT_LOG_DIR}")"
+  STATE_DIR="$(normalize_managed_path "${STATE_DIR:-$DEFAULT_STATE_DIR}")"
+  ARCHIVE_BASE_DIR="$(normalize_managed_path "${ARCHIVE_BASE_DIR:-$DEFAULT_ARCHIVE_BASE_DIR}")"
   ALLOW_NON_DAILYBACKUPS_DESTINATION="${ALLOW_NON_DAILYBACKUPS_DESTINATION:-false}"
 }
 

@@ -84,6 +84,44 @@ strip_leading_slashes() {
   printf '%s' "$value"
 }
 
+collapse_repeated_slashes() {
+  local value="$1"
+  local result=""
+  local char
+  local previous_was_slash="false"
+  local i
+
+  for ((i = 0; i < ${#value}; i++)); do
+    char="${value:i:1}"
+    if [[ "$char" == "/" ]]; then
+      if [[ "$previous_was_slash" != "true" ]]; then
+        result+="/"
+        previous_was_slash="true"
+      fi
+    else
+      result+="$char"
+      previous_was_slash="false"
+    fi
+  done
+
+  printf '%s' "$result"
+}
+
+normalize_managed_path() {
+  local value="$1"
+
+  value="$(collapse_repeated_slashes "$value")"
+  strip_trailing_slashes "$value"
+}
+
+normalize_source_path() {
+  local value="$1"
+
+  value="$(strip_leading_slashes "$value")"
+  value="$(collapse_repeated_slashes "$value")"
+  strip_trailing_slashes "$value"
+}
+
 require_absolute_path() {
   local value="$1"
   local name="$2"
@@ -96,7 +134,7 @@ require_managed_path_safe() {
   local path
   local name="$2"
 
-  path="$(strip_trailing_slashes "$1")"
+  path="$(normalize_managed_path "$1")"
 
   require_absolute_path "$path" "$name"
 
@@ -115,8 +153,8 @@ path_is_within() {
   local child
   local parent
 
-  child="$(strip_trailing_slashes "$1")"
-  parent="$(strip_trailing_slashes "$2")"
+  child="$(normalize_managed_path "$1")"
+  parent="$(normalize_managed_path "$2")"
 
   [[ "$child" == "$parent" || "$child" == "$parent"/* ]]
 }
@@ -139,7 +177,7 @@ validate_bool() {
 }
 
 require_rclone_metadata_support() {
-  if ! "$RCLONE_BIN" lsjson --help 2>/dev/null | grep -q -- '--metadata'; then
+  if ! "$RCLONE_BIN" lsjson --metadata --help >/dev/null 2>&1; then
     fail "Installed rclone does not support 'lsjson --metadata'. Install a current rclone release before using financial-year metadata retention."
   fi
 }
@@ -503,7 +541,7 @@ prune_local_files_not_selected() {
   done < <(find "$VPS_DESTINATION_DIR" -type f -print0)
 
   if ! is_true "$DRY_RUN"; then
-    find "$VPS_DESTINATION_DIR" -depth -type d -empty -delete
+    find "$VPS_DESTINATION_DIR" -mindepth 1 -depth -type d -empty -delete
   fi
 
   print "Local prune candidates: $LOCAL_PRUNE_CANDIDATES"
@@ -527,7 +565,9 @@ run_latest_per_financial_year_transfer() {
 
   if is_true "$ARCHIVE_DELETED_FILES"; then
     ARCHIVE_RUN_DIR="${ARCHIVE_BASE_DIR}/${RUN_ID}"
-    mkdir -p "$ARCHIVE_RUN_DIR"
+    if ! is_true "$DRY_RUN"; then
+      mkdir -p "$ARCHIVE_RUN_DIR"
+    fi
     RCLONE_ARGS+=(--backup-dir "$ARCHIVE_RUN_DIR" --suffix ".${RUN_ID}")
     print "Overwritten copied files and pruned local files will be archived to: $ARCHIVE_RUN_DIR"
   fi
@@ -553,7 +593,9 @@ run_standard_transfer() {
 
   if [[ "$SYNC_MODE" == "sync" ]] && is_true "$ARCHIVE_DELETED_FILES"; then
     ARCHIVE_RUN_DIR="${ARCHIVE_BASE_DIR}/${RUN_ID}"
-    mkdir -p "$ARCHIVE_RUN_DIR"
+    if ! is_true "$DRY_RUN"; then
+      mkdir -p "$ARCHIVE_RUN_DIR"
+    fi
     RCLONE_ARGS+=(--backup-dir "$ARCHIVE_RUN_DIR" --suffix ".${RUN_ID}")
     print "Deleted/overwritten destination files will be archived to: $ARCHIVE_RUN_DIR"
   fi
@@ -678,19 +720,10 @@ case "$RETENTION_TIMESTAMP_MODE" in
   *) fail "RETENTION_TIMESTAMP_MODE must be latest_metadata_time, upload_time, modified_time, or rclone_modtime. Current value: $RETENTION_TIMESTAMP_MODE" ;;
 esac
 
-VPS_DESTINATION_DIR="$(strip_trailing_slashes "$VPS_DESTINATION_DIR")"
-LOG_DIR="$(strip_trailing_slashes "$LOG_DIR")"
-STATE_DIR="$(strip_trailing_slashes "$STATE_DIR")"
-ARCHIVE_BASE_DIR="$(strip_trailing_slashes "$ARCHIVE_BASE_DIR")"
-
-require_managed_path_safe "$STATE_DIR" "STATE_DIR"
-STATE_DIR_SAFE_FOR_SUMMARY="true"
-
-NORMALIZED_SOURCE_PATH="$(strip_leading_slashes "$GDRIVE_SOURCE_PATH")"
-NORMALIZED_SOURCE_PATH="$(strip_trailing_slashes "$NORMALIZED_SOURCE_PATH")"
-if [[ -z "$NORMALIZED_SOURCE_PATH" || "$NORMALIZED_SOURCE_PATH" == "." || "$NORMALIZED_SOURCE_PATH" == *'/../'* || "$NORMALIZED_SOURCE_PATH" == ../* || "$NORMALIZED_SOURCE_PATH" == */.. || "$NORMALIZED_SOURCE_PATH" == '..' ]]; then
-  fail "GDRIVE_SOURCE_PATH must point to a specific Google Drive backup folder. Refusing to use Drive root or parent-directory traversal."
-fi
+VPS_DESTINATION_DIR="$(normalize_managed_path "$VPS_DESTINATION_DIR")"
+LOG_DIR="$(normalize_managed_path "$LOG_DIR")"
+STATE_DIR="$(normalize_managed_path "$STATE_DIR")"
+ARCHIVE_BASE_DIR="$(normalize_managed_path "$ARCHIVE_BASE_DIR")"
 
 destination_leaf="${VPS_DESTINATION_DIR##*/}"
 if [[ "$destination_leaf" != "dailybackups" ]] && ! is_true "$ALLOW_NON_DAILYBACKUPS_DESTINATION"; then
@@ -699,16 +732,32 @@ fi
 
 require_managed_path_safe "$VPS_DESTINATION_DIR" "VPS_DESTINATION_DIR"
 require_managed_path_safe "$LOG_DIR" "LOG_DIR"
+require_managed_path_safe "$STATE_DIR" "STATE_DIR"
 require_managed_path_safe "$ARCHIVE_BASE_DIR" "ARCHIVE_BASE_DIR"
 
-for managed_path in "$LOG_DIR" "$STATE_DIR" "$ARCHIVE_BASE_DIR"; do
+if path_is_within "$STATE_DIR" "$VPS_DESTINATION_DIR"; then
+  fail "STATE_DIR must not be inside VPS_DESTINATION_DIR because retention pruning manages destination files: $STATE_DIR"
+fi
+
+if [[ "$STATE_DIR" == "$LOG_DIR" || "$STATE_DIR" == "$ARCHIVE_BASE_DIR" ]]; then
+  fail "STATE_DIR must be separate from LOG_DIR and ARCHIVE_BASE_DIR."
+fi
+
+STATE_DIR_SAFE_FOR_SUMMARY="true"
+
+for managed_path in "$LOG_DIR" "$ARCHIVE_BASE_DIR"; do
   if path_is_within "$managed_path" "$VPS_DESTINATION_DIR"; then
     fail "LOG_DIR, STATE_DIR, and ARCHIVE_BASE_DIR must not be inside VPS_DESTINATION_DIR because retention pruning manages destination files: $managed_path"
   fi
 done
 
-if [[ "$LOG_DIR" == "$STATE_DIR" || "$LOG_DIR" == "$ARCHIVE_BASE_DIR" || "$STATE_DIR" == "$ARCHIVE_BASE_DIR" ]]; then
+if [[ "$LOG_DIR" == "$ARCHIVE_BASE_DIR" ]]; then
   fail "LOG_DIR, STATE_DIR, and ARCHIVE_BASE_DIR must be separate directories."
+fi
+
+NORMALIZED_SOURCE_PATH="$(normalize_source_path "$GDRIVE_SOURCE_PATH")"
+if [[ -z "$NORMALIZED_SOURCE_PATH" || "$NORMALIZED_SOURCE_PATH" == "." || "$NORMALIZED_SOURCE_PATH" == ./* || "$NORMALIZED_SOURCE_PATH" == *'/./'* || "$NORMALIZED_SOURCE_PATH" == */. || "$NORMALIZED_SOURCE_PATH" == *'/../'* || "$NORMALIZED_SOURCE_PATH" == ../* || "$NORMALIZED_SOURCE_PATH" == */.. || "$NORMALIZED_SOURCE_PATH" == '..' ]]; then
+  fail "GDRIVE_SOURCE_PATH must point to a specific Google Drive backup folder. Refusing to use Drive root, dot segments, or parent-directory traversal."
 fi
 
 if [[ -n "$RCLONE_FILTER_FILE" ]]; then
