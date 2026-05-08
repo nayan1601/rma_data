@@ -15,6 +15,18 @@ findmnt
 
 If `/dailybackups` should use a dedicated disk, partition, LVM volume, or mounted storage path, mount that storage before running the sync in production.
 
+## Repository Validation Before VPS Installation
+
+When changing this repository, run the local validation suite before installing or updating a production VPS:
+
+```bash
+bash -n scripts/*.sh tests/*.sh
+shellcheck scripts/*.sh tests/*.sh
+tests/test-sync-google-drive-sql-backups.sh
+```
+
+The offline test harness creates a temporary fake `rclone` command and controlled remote metadata. It checks latest-per-financial-year selection, dry-run non-mutation, archive/prune behavior, root-level source rejection, post-sync verification, and last-run summary fields without needing Google Drive credentials.
+
 ## 1. Copy The Project To The VPS
 
 Use whichever deployment method is standard for the VPS.
