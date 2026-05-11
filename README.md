@@ -66,3 +66,15 @@ DRY_RUN="true"
 ```
 
 Do not set it to `false` until the source folder, destination folder, filters, and logs have been verified.
+
+## Local Validation Before Deployment
+
+Run these checks from the repository root after changing scripts, systemd units, filters, or documentation examples:
+
+```bash
+bash -n scripts/*.sh tests/*.sh
+shellcheck scripts/*.sh tests/*.sh
+tests/test-sync-google-drive-sql-backups.sh
+```
+
+The test harness uses a temporary fake `rclone` binary and controlled metadata, so it does not need Google Drive credentials. It verifies latest-per-financial-year selection, dry-run safety, local pruning/archive behavior, root-level source rejection, post-sync checks, and summary writing.
