@@ -54,6 +54,7 @@ REQUIRED_COMMANDS=(
   grep
   jq
   rclone
+  realpath
   sed
   tee
   wc

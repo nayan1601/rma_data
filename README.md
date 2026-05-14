@@ -39,6 +39,16 @@ sudo bash scripts/install-systemd-google-drive-sync.sh
 systemctl list-timers --all | grep rclone-gdrive-sql-backup-sync
 ```
 
+## Local Validation
+
+Before deploying changes, run the repository validation script from the repo root:
+
+```bash
+tests/run-backup-sync-tests.sh
+```
+
+The test suite uses a fake `rclone` binary and temporary folders to verify financial-year selection, real-run pruning and archiving, dry-run no-change behavior, and the guard that prevents `ARCHIVE_BASE_DIR` from living inside `VPS_DESTINATION_DIR`.
+
 ## Documentation Index
 
 Read the documentation in this order:
