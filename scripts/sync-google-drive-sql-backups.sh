@@ -212,6 +212,22 @@ get_destination_mount_target() {
   findmnt -n -T "$dir" -o TARGET
 }
 
+normalize_absolute_path_for_compare() {
+  local path="$1"
+
+  realpath -m -- "$path"
+}
+
+path_is_same_or_inside() {
+  local child
+  local parent
+
+  child="$(normalize_absolute_path_for_compare "$1")"
+  parent="$(normalize_absolute_path_for_compare "$2")"
+
+  [[ "$child" == "$parent" || "$child" == "$parent"/* ]]
+}
+
 ensure_directory() {
   local path="$1"
   local mode="$2"
@@ -782,6 +798,7 @@ require_command "rm"
 require_command "tee"
 require_command "grep"
 require_command "sed"
+require_command "realpath"
 
 if [[ "$RETENTION_POLICY" == "latest_per_financial_year" ]]; then
   require_command "jq"
