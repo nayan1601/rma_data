@@ -1,13 +1,16 @@
 [Unit]
-Description=Run Google Drive SQL backup sync daily
+Description=Check Google Drive SQL backups every 30 minutes
 
 [Timer]
-# The time is interpreted in the VPS local timezone.
-# Change this if the database backup job finishes at a different time.
-OnCalendar=*-*-* 02:30:00
+# Check twice per hour, at minute 00 and minute 30, in the VPS local timezone.
+# This provides automatic fetch within 30 minutes of a Google Drive upload in
+# normal operation. AccuracySec is kept strict so systemd does not coalesce the
+# run far beyond the target window.
+OnCalendar=*:0/30
+OnBootSec=5m
 Persistent=true
-RandomizedDelaySec=15m
-AccuracySec=1m
+RandomizedDelaySec=0
+AccuracySec=1s
 Unit=rclone-gdrive-sql-backup-sync.service
 
 [Install]

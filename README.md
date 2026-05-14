@@ -10,7 +10,7 @@ This project starts with one production operations module:
 - Select latest files from Google Drive upload/update metadata, not filenames.
 - Bootstrap missing Ubuntu requirements automatically during installation.
 - Create and validate required folders and permissions.
-- Run manually for validation, then automatically through `systemd`.
+- Run manually for validation, then automatically through `systemd` every 30 minutes.
 - Keep implementation code and separate project documentation complete enough for interns, engineers, managers, and CTO-level review.
 
 ## Current Module
@@ -32,22 +32,24 @@ sudo /usr/local/bin/rclone-gdrive-sql-backup-sync /etc/rclone-gdrive-sql-backup-
 
 The installer is idempotent. Re-running it repairs missing packages, missing folders, installed script permissions, environment-file permissions, and the rclone binary if metadata support is missing.
 
-When the dry run is correct, set `DRY_RUN="false"` in `/etc/rclone-gdrive-sql-backup-sync.env`, run the script once again, and then enable the daily timer:
+When the dry run is correct, set `DRY_RUN="false"` in `/etc/rclone-gdrive-sql-backup-sync.env`, run the script once again, and then enable the 30-minute timer:
 
 ```bash
 sudo bash scripts/install-systemd-google-drive-sync.sh
 systemctl list-timers --all | grep rclone-gdrive-sql-backup-sync
 ```
 
-## Local Validation
+## Local Validation Before Deployment
 
-Before deploying changes, run the repository validation script from the repo root:
+Run these checks from the repository root after changing scripts, systemd units, filters, or documentation examples:
 
 ```bash
-tests/run-backup-sync-tests.sh
+bash -n scripts/*.sh tests/*.sh
+shellcheck scripts/*.sh tests/*.sh
+tests/test-sync-google-drive-sql-backups.sh
 ```
 
-The test suite uses a fake `rclone` binary and temporary folders to verify financial-year selection, real-run pruning and archiving, dry-run no-change behavior, and the guard that prevents `ARCHIVE_BASE_DIR` from living inside `VPS_DESTINATION_DIR`.
+The test suite uses a fake `rclone` binary and temporary folders to verify financial-year selection, real-run pruning and archiving, dry-run safety, root-level source rejection, source-path validation, post-sync checks, summary writing, and the guards that keep runtime folders outside `VPS_DESTINATION_DIR`.
 
 ## Documentation Index
 
@@ -60,6 +62,7 @@ Read the documentation in this order:
 5. `docs/backup-sync/05-security-and-troubleshooting.md`
 6. `docs/backup-sync/06-financial-year-retention.md`
 7. `docs/backup-sync/07-ubuntu-2404-baremetal-deployment.md`
+8. `docs/backup-sync/08-realtime-and-30-minute-fetch.md`
 
 ## Important Safety Rule
 
